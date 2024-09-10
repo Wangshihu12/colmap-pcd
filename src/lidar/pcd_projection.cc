@@ -9,19 +9,23 @@ namespace lidar{
 
 using namespace Eigen;
 
+// 将激光雷达点投影到图像上，并存储与图像点对应的三维点信息
 void PcdProj::SetNewImage(const Image& image, const Camera& camera, std::map<point3D_t,Eigen::Matrix<double,6,1>>& map){
     // Create a new image struct
+    // 从图像中提取旋转和平移信息
     Eigen::Quaterniond q_cw(image.Qvec()[0],image.Qvec()[1],image.Qvec()[2],image.Qvec()[3]);
     Eigen::Matrix3d rot_cw = q_cw.toRotationMatrix();
     Eigen::Vector3d t_cw = image.Tvec();
     
     // Only for opencv camera model
+    // 初始化图像参数
     std::vector<double> params = camera.Params();
     double scale = options_.depth_image_scale;
     int img_h = static_cast<int>(camera.Height() * scale);
     int img_w = static_cast<int>(camera.Width() * scale);
 
     // Save the pixel position and 3d_id
+    // 遍历图像中的 2D 点，如果有对应的 3D 点信息，则保存
     std::set<Eigen::Matrix<int,2,1>,fea_compare> features;
     for (const Point2D& point2D : image.Points2D()){
         if (!point2D.HasPoint3D()) {
@@ -32,8 +36,10 @@ void PcdProj::SetNewImage(const Image& image, const Camera& camera, std::map<poi
         features.insert(uv);
     }
 
+    // 创建图像对象
     LImage img(features,rot_cw,t_cw);
 
+    // 初始化相机参数
     img.img_height = img_h;
     img.img_width = img_w;
     img.img_name = image.Name();
@@ -45,11 +51,14 @@ void PcdProj::SetNewImage(const Image& image, const Camera& camera, std::map<poi
     // Search which nodes in the map correspond to the current image
     ImageMapType img_nodes;
 
+    // 搜索地图中对应的节点
     SearchSubMap(img, img_nodes);
 
     // Project lidar points to image
+    // 投影雷达点到图像
     ImageMapProj(img, img_nodes, camera);
 
+    // 匹配图像点与激光雷达点
     for (const Point2D& point2D : image.Points2D()){
         if (!point2D.HasPoint3D()) {
             continue;
@@ -72,6 +81,7 @@ void PcdProj::SetNewImage(const Image& image, const Camera& camera, std::map<poi
         }
     }
 
+    // 保存深度图像
     if (options_.if_save_depth_image){
         SaveDepthImage(img);
         std::cout<<"Saved depth image "<<img.img_name<<std::endl;
@@ -161,9 +171,14 @@ void PcdProj::SetNewImage(const Image& image,
         }
     }    
 }
+
+// 构建子地图
 void PcdProj::BuildSubMap(const MapType& ptr){
+    // 设置全局地图
     global_map_ptr_ = ptr;
+    // 遍历地图点
     for (PointType& pt : ptr->points){
+        // 更新全局地图中最大和最小的坐标
         global_map_min_x_ = std::min(global_map_min_x_, pt.x);
         global_map_max_x_ = std::max(global_map_max_x_, pt.x);
         global_map_min_y_ = std::min(global_map_min_y_, pt.y);
@@ -171,6 +186,7 @@ void PcdProj::BuildSubMap(const MapType& ptr){
         global_map_min_z_ = std::min(global_map_min_z_, pt.z);
         global_map_max_z_ = std::max(global_map_max_z_, pt.z);
 
+        // 在子地图中创建节点
         auto key = GetKeyType(pt);
         auto iter = submap_.find(key);
         if (iter == submap_.end()){
@@ -184,6 +200,7 @@ void PcdProj::BuildSubMap(const MapType& ptr){
     }
 }
 
+// 创建金字塔
 void PcdProj::SearchSubMap(const LImage& img, ImageMapType& image_map){
 
     Eigen::Matrix3f rot_wc = img.rot_cw.cast<float>().transpose();
@@ -202,12 +219,14 @@ void PcdProj::SearchSubMap(const LImage& img, ImageMapType& image_map){
     Eigen::Vector3f corner_3 = x_bar_v * x_bar_min  + y_bar_v * y_bar_min;
     Eigen::Vector3f corner_4 = x_bar_v * x_bar_min  + y_bar_v * y_bar_max;
     // Get the four corners of the pyramid
+    // 金字塔的角点
     corner_1 = (t_wc + rot_wc * (center_v + corner_1) * options_.choose_meter).eval();
     corner_2 = (t_wc + rot_wc * (center_v + corner_2) * options_.choose_meter).eval();
     corner_3 = (t_wc + rot_wc * (center_v + corner_3) * options_.choose_meter).eval();
     corner_4 = (t_wc + rot_wc * (center_v + corner_4) * options_.choose_meter).eval();
 
     // Initialize the pyramid
+    // 初始化金字塔
     QuadPyramid quad_pyramid(t_wc,corner_1,corner_2,corner_3,corner_4);
   
     SearchImageMap(quad_pyramid,image_map);
