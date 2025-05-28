@@ -55,7 +55,7 @@ void PcdProj::SetNewImage(const Image& image, const Camera& camera, std::map<poi
     // 在子地图中搜索与当前图像视锥体相交的节点
     SearchSubMap(img, img_nodes);
 
-    // 将激光雷达点投影到图像上
+    // 将激光雷达点投影到图像上，建立特征点与雷达点的映射关系
     ImageMapProj(img, img_nodes, camera);
 
     // 匹配图像点与激光雷达点
@@ -252,6 +252,12 @@ void PcdProj::SearchSubMap(const LImage& img, ImageMapType& image_map){
     SearchImageMap(quad_pyramid,image_map);
 }
 
+/**
+ * [功能描述]：将图像中的特征点投影到点云中，并计算投影尺度
+ * @param [img]：[输入图像]，包含所有特征点。
+ * @param [image_map]：[输入点云数据]，包含所有关键帧点。
+ * @param [camera]：[输入相机参数]，包含相机内参。
+ */
 void PcdProj::ImageMapProj(LImage& img, ImageMapType& image_map, const Camera& camera){
     // 获取相机的旋转矩阵和平移向量（世界坐标系到相机坐标系的变换）
     Eigen::Matrix3f rot_cw = img.rot_cw.cast<float>();
