@@ -160,56 +160,82 @@ void IncrementalMapper::LoadPointcloud(std::string& pointcloud_path,
 
   }
 }
+
+// 查找合适的初始图像对用于增量式三维重建
+// 输入参数：
+//   - options: 算法配置选项
+//   - image_id1, image_id2: 输出参数，存储找到的初始图像对的ID
+// 返回值：
+//   - true: 成功找到合适的初始图像对
+//   - false: 未能找到合适的初始图像对
 bool IncrementalMapper::FindInitialImagePair(const Options& options,
                                              image_t* image_id1,
                                              image_t* image_id2) {
   CHECK(options.Check());
 
+  // 用于存储候选的第一张图像ID列表
   std::vector<image_t> image_ids1;
+
+  // 处理三种情况：1.只提供了第一张图像 2.只提供了第二张图像 3.没有提供任何图像
   if (*image_id1 != kInvalidImageId && *image_id2 == kInvalidImageId) {
-    // Only *image_id1 provided.
+    // 情况1：只提供了第一张图像ID
     if (!database_cache_->ExistsImage(*image_id1)) {
+      // 如果指定的图像不存在，返回失败
       return false;
     }
+    // 将提供的图像ID添加为候选
     image_ids1.push_back(*image_id1);
   } else if (*image_id1 == kInvalidImageId && *image_id2 != kInvalidImageId) {
-    // Only *image_id2 provided.
+    // 情况2：只提供了第二张图像ID
     if (!database_cache_->ExistsImage(*image_id2)) {
+      // 如果指定的图像不存在，返回失败
       return false;
     }
     image_ids1.push_back(*image_id2);
   } else {
-    // No initial seed image provided.
+    // 情况3：没有提供有效的初始图像
+    // 调用函数自动选择第一张图像（通常基于特征点数量或连接性）
     image_ids1 = FindFirstInitialImage(options);
   }
 
-  // Try to find good initial pair.
+  // 遍历所有候选的第一张图像
   for (size_t i1 = 0; i1 < image_ids1.size(); ++i1) {
+    // 设置当前尝试的第一张图像ID
     *image_id1 = image_ids1[i1];
 
+    // 根据第一张图像查找合适的第二张图像（通常基于共视特征点数量）
     const std::vector<image_t> image_ids2 =
         FindSecondInitialImage(options, *image_id1);
 
+    // 遍历所有候选的第二张图像
     for (size_t i2 = 0; i2 < image_ids2.size(); ++i2) {
+      // 设置当前尝试的第二张图像ID
       *image_id2 = image_ids2[i2];
 
+      // 计算图像对的唯一标识符
       const image_pair_t pair_id =
           Database::ImagePairToPairId(*image_id1, *image_id2);
 
-      // Try every pair only once.
+      // 如果这个图像对已经尝试过，则跳过
+      // 这避免了重复计算和无限循环
       if (init_image_pairs_.count(pair_id) > 0) {
         continue;
       }
 
+      // 将当前图像对标记为已尝试
       init_image_pairs_.insert(pair_id);
 
+      // 尝试为这对图像估计初始的两视图几何关系（相对位姿）
+      // 这通常包括估计基础矩阵或本质矩阵，以及三角化初始点云
       if (EstimateInitialTwoViewGeometry(options, *image_id1, *image_id2)) {
+        // 如果成功估计两视图几何，返回成功
         return true;
       }
     }
   }
 
-  // No suitable pair found in entire dataset.
+  // 如果遍历完所有可能的图像对仍未找到合适的初始对
+    // 设置图像ID为无效值并返回失败
   *image_id1 = kInvalidImageId;
   *image_id2 = kInvalidImageId;
 
