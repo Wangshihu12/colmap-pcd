@@ -40,29 +40,64 @@ namespace colmap {
 
 CorrespondenceGraph::CorrespondenceGraph() {}
 
+/**
+ * 获取所有图像对之间的特征点对应数量
+ * 
+ * 该函数统计并返回所有图像对之间的对应点数量，生成一个映射表。
+ * 这些统计信息可用于评估图像之间的连接强度，帮助选择初始图像对和下一张要注册的图像。
+ * 
+ * @return 一个映射表，键为图像对ID，值为对应点数量
+ */
 std::unordered_map<image_pair_t, point2D_t>
 CorrespondenceGraph::NumCorrespondencesBetweenImages() const {
+  // 创建结果容器，用于存储图像对之间的对应点数量
   std::unordered_map<image_pair_t, point2D_t> num_corrs_between_images;
+  // 预分配足够的容量以提高性能
   num_corrs_between_images.reserve(image_pairs_.size());
+
+  // 遍历所有已知的图像对
   for (const auto& image_pair : image_pairs_) {
+    // 将图像对ID和对应点数量添加到结果映射表中
     num_corrs_between_images.emplace(image_pair.first,
                                      image_pair.second.num_correspondences);
   }
+  // 返回统计结果
   return num_corrs_between_images;
 }
 
+/**
+ * 完成对应图的构建过程
+ * 
+ * 该函数执行对应图的最终处理，包括：
+ * 1. 计算每个图像的有效观测数（有对应关系的特征点数量）
+ * 2. 优化内存使用（收缩容器大小）
+ * 3. 移除没有任何对应关系的图像
+ * 
+ * 在完成特征匹配后调用此函数以优化对应图结构
+ */
 void CorrespondenceGraph::Finalize() {
+  // 遍历所有图像
   for (auto it = images_.begin(); it != images_.end();) {
+    // 重置观测计数器
     it->second.num_observations = 0;
+
+    // 遍历该图像中所有特征点的对应关系
     for (auto& corr : it->second.corrs) {
+      // 收缩容器大小，释放多余内存
       corr.shrink_to_fit();
+
+      // 如果该特征点有至少一个对应关系，增加观测计数
       if (corr.size() > 0) {
         it->second.num_observations += 1;
       }
     }
+
+    // 如果图像没有任何有效观测（所有特征点都没有对应关系）
     if (it->second.num_observations == 0) {
-      images_.erase(it++);
+      // 从对应图中移除该图像
+      images_.erase(it++); // 注意迭代器更新方式，确保在删除后正确移动到下一项
     } else {
+      // 移动到下一个图像
       ++it;
     }
   }
@@ -216,24 +251,44 @@ void CorrespondenceGraph::FindTransitiveCorrespondences(
   found_corrs->pop_back();
 }
 
+/**
+ * 查找两张图像之间的特征点对应关系
+ * 
+ * 该函数在给定的两张图像之间寻找所有匹配的特征点对，返回它们的索引。
+ * 在SfM重建中，这些对应关系是三角化3D点和相机位姿估计的基础。
+ * 
+ * @param image_id1 第一张图像的ID
+ * @param image_id2 第二张图像的ID
+ * @return 特征点匹配对的集合，每对包含两个图像中对应点的索引
+ */
 FeatureMatches CorrespondenceGraph::FindCorrespondencesBetweenImages(
     const image_t image_id1, const image_t image_id2) const {
+
+  // 首先查询两张图像之间的对应点数量
   const auto num_correspondences =
       NumCorrespondencesBetweenImages(image_id1, image_id2);
 
+  // 如果没有对应关系，返回空集合
   if (num_correspondences == 0) {
     return {};
   }
 
+  // 创建结果容器，预分配足够容量以提高性能
   FeatureMatches found_corrs;
   found_corrs.reserve(num_correspondences);
 
+  // 获取第一张图像的对应关系数据结构
   const struct Image& image1 = images_.at(image_id1);
 
+  // 遍历第一张图像中的所有特征点
   for (point2D_t point2D_idx1 = 0; point2D_idx1 < image1.corrs.size();
        ++point2D_idx1) {
+    // 对于每个特征点，遍历它与其他图像特征点的所有对应关系
     for (const Correspondence& corr1 : image1.corrs[point2D_idx1]) {
+      // 如果对应关系的目标图像是我们要查找的第二张图像
       if (corr1.image_id == image_id2) {
+        // 将匹配对添加到结果集合中
+        // 每个匹配对包含第一张图像中点的索引和第二张图像中对应点的索引
         found_corrs.emplace_back(point2D_idx1, corr1.point2D_idx);
       }
     }

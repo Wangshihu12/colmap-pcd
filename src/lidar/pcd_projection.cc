@@ -88,89 +88,122 @@ void PcdProj::SetNewImage(const Image& image, const Camera& camera, std::map<poi
     }
 }
 
+/**
+ * 将图像特征点投影到激光雷达点云以获取3D坐标
+ * 
+ * 该函数将2D图像特征点与激光雷达点云建立对应关系，通过搜索、投影和平面方程求解，
+ * 计算每个图像特征点在相机坐标系下的3D坐标。
+ * 
+ * @param image 输入图像，包含位姿信息
+ * @param camera 相机参数，包含内参
+ * @param pt_xys 输入/输出参数，包含图像特征点的2D坐标和匹配状态标志
+ * @param pt_xyzs 输出参数，对应特征点的3D坐标
+ */
 void PcdProj::SetNewImage(const Image& image, 
             const Camera& camera, 
             std::vector<std::pair<Eigen::Vector2d, bool>,Eigen::aligned_allocator<std::pair<Eigen::Vector2d, bool>>>& pt_xys,   // 像素坐标和匹配标志
             std::vector<Eigen::Vector3d,Eigen::aligned_allocator<Eigen::Vector3d>>& pt_xyzs){           // 图像坐标对应 3D 点
-    // 从图像中提取旋转和平移矩阵
-    Eigen::Quaterniond q_cw(image.Qvec()[0],image.Qvec()[1],image.Qvec()[2],image.Qvec()[3]);
-    Eigen::Matrix3d rot_cw = q_cw.toRotationMatrix();
-    Eigen::Vector3d t_cw = image.Tvec();
+    // 从图像中提取相机位姿（从相机坐标系到世界坐标系的变换）
+    Eigen::Quaterniond q_cw(image.Qvec()[0],image.Qvec()[1],image.Qvec()[2],image.Qvec()[3]); // 四元数表示的旋转
+    Eigen::Matrix3d rot_cw = q_cw.toRotationMatrix(); // 转换为旋转矩阵
+    Eigen::Vector3d t_cw = image.Tvec(); // 平移向量
     
-    // Only for OpenCV camera model
-    // 初始化图像参数
+    // 仅适用于OpenCV相机模型
+    // 获取相机内参并计算图像尺寸
     std::vector<double> params = camera.Params();
-    double scale = options_.depth_image_scale;
-    int img_h = static_cast<int>(camera.Height() * scale);
-    int img_w = static_cast<int>(camera.Width() * scale);
+    double scale = options_.depth_image_scale; // 深度图像缩放因子
+    int img_h = static_cast<int>(camera.Height() * scale); // 缩放后的图像高度
+    int img_w = static_cast<int>(camera.Width() * scale); // 缩放后的图像宽度
 
+    // 创建一个特征点集合，用于存储有效的特征点
     std::set<Eigen::Matrix<int,2,1>,fea_compare> features;
     for (const auto& pt_xy : pt_xys){
-
+        // 将特征点坐标缩放并转换为整数坐标
         Eigen::Matrix<int,2,1> uv = (pt_xy.first * scale).cast<int>();
+        // 忽略超出图像边界的点
         if (uv(0)<0 || uv(0)>=img_w || uv(1)<0 || uv(1)>=img_h ) continue;
         features.insert(uv);
     }
 
+    // 创建LImage对象，包含特征点、相机位姿等信息
     LImage img(features,rot_cw,t_cw);
-    img.img_height = img_h;
-    img.img_width = img_w;
-    img.img_name = image.Name();
-    img.fx = params[0] * scale;
-    img.fy = params[1] * scale;
-    img.cx = params[2] * scale;
-    img.cy = params[3] * scale;
+    img.img_height = img_h; // 设置图像高度
+    img.img_width = img_w; // 设置图像宽度
+    img.img_name = image.Name(); // 设置图像名称
+    img.fx = params[0] * scale; // 设置x方向焦距（已缩放）
+    img.fy = params[1] * scale; // 设置y方向焦距（已缩放）
+    img.cx = params[2] * scale; // 设置x方向主点（已缩放）
+    img.cy = params[3] * scale; // 设置y方向主点（已缩放）
 
+    // 用于存储与当前图像视锥体相交的点云节点
     ImageMapType img_nodes;
 
     // 在子地图中搜索与当前图像视锥体相交的点云，并放入img_nodes中
     SearchSubMap(img, img_nodes);
 
+    // 将图像特征点投影到激光雷达点云中，建立特征点与雷达点的映射关系
     ImageMapProj(img, img_nodes, camera);
 
-    // Get the equation of the plane
+    // 获取原始相机内参（未缩放）
     double fx = params[0];
     double fy = params[1];
     double cx = params[2];
     double cy = params[3];
 
+    // 处理每个特征点，尝试找到对应的3D坐标
     for (auto& pt_xy : pt_xys){
-
+        // 将特征点坐标缩放为整数坐标
         Eigen::Matrix<int,2,1> uv = (pt_xy.first * scale).cast<int>();
+        // 如果点超出图像边界，标记为未匹配并添加零向量
         if (uv(0)<0 || uv(0)>=img_w || uv(1)<0 || uv(1)>=img_h ){
-            pt_xy.second = false;
+            pt_xy.second = false; // 设置匹配失败标志
             Eigen::Vector3d pt_xyz = Eigen::Vector3d::Zero();
-            pt_xyzs.push_back(pt_xyz);
+            pt_xyzs.push_back(pt_xyz); // 添加零向量到结果列表
             continue;
         } 
 
+        // 在特征点映射中查找对应的激光雷达点
         auto iter = img.feature_pts_map.find(uv);
         if (iter != img.feature_pts_map.end()){
+            // 找到对应的激光雷达点，标记为匹配成功
             pt_xy.second = true;
-            // u = fx * x / z + cx
-            // v = fy * y / z + cy
-            // z * (u - cx)/fx = x
-            // z * (v - cy)/fy = y
-            // ax + by + cz + d = 0
-            // (a * (u - cx)/fx + b * (v - cy)/fy + c ) * z + d = 0
+            
+            // 使用平面方程和针孔相机模型求解3D点坐标
+            // 相机模型: u = fx * x / z + cx, v = fy * y / z + cy
+            // 平面方程: ax + by + cz + d = 0
+            // 联立求解得到点的3D坐标
+
+            // 获取激光雷达点的法向量和位置
             double a = static_cast<double>(iter->second.first.normal_x);
             double b = static_cast<double>(iter->second.first.normal_y);
             double c = static_cast<double>(iter->second.first.normal_z);
+
+            // 计算平面方程中的d参数: ax + by + cz + d = 0
             double d = 0 - a * static_cast<double>(iter->second.first.x)
                          - b * static_cast<double>(iter->second.first.y)
                          - c * static_cast<double>(iter->second.first.z);
+
+            // 获取特征点的原始坐标（未缩放）
             double u = pt_xy.first(0);
             double v = pt_xy.first(1);
+
+            // 求解z坐标
+            // 从平面方程和相机模型联立得到: 
+            // (a * (u - cx)/fx + b * (v - cy)/fy + c) * z + d = 0
             double z = - d / (a * (u - cx)/fx + b * (v - cy)/fy + c );
+            // 根据z和相机模型反推x、y坐标
             double x = z * (u - cx)/fx;
             double y = z * (v - cy)/fy;
+
+            // 创建3D点并添加到结果列表
             Eigen::Vector3d pt_xyz;
             pt_xyz << x,y,z;
             pt_xyzs.push_back(pt_xyz);
         } else {
+            // 未找到对应的激光雷达点，标记为匹配失败
             pt_xy.second = false;
-            Eigen::Vector3d pt_xyz = Eigen::Vector3d::Zero();
-            pt_xyzs.push_back(pt_xyz);
+            Eigen::Vector3d pt_xyz = Eigen::Vector3d::Zero(); // 创建零向量
+            pt_xyzs.push_back(pt_xyz); // 添加零向量到结果列表
         }
     }    
 }

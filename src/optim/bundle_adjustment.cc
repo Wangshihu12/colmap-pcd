@@ -1283,22 +1283,35 @@ const ceres::Solver::Summary& ParallelBundleAdjuster::Summary() const {
   return summary_;
 }
 
+/**
+ * 检查并行束调整(PBA)是否支持当前的优化选项
+ * 并行束调整有一些特定限制，不是所有场景配置都支持
+ * @param options: 束调整的优化配置选项
+ * @param reconstruction: 三维重建场景的数据结构
+ * @return 如果PBA支持当前选项，返回true；否则返回false
+ */
 bool ParallelBundleAdjuster::IsSupported(const BundleAdjustmentOptions& options,
                                          const Reconstruction& reconstruction) {
+  // 检查条件1：不支持优化主点参数(principal point)
+  // 检查条件2：焦距和额外参数(如畸变系数)必须同时优化或同时不优化
   if (options.refine_principal_point ||
       options.refine_focal_length != options.refine_extra_params) {
-    return false;
+    return false; // 不满足条件，返回不支持
   }
 
-  // Check that all cameras are SIMPLE_RADIAL and that no intrinsics are shared.
-  std::set<camera_t> camera_ids;
-  for (const auto& image : reconstruction.Images()) {
-    if (image.second.IsRegistered()) {
+  // 检查条件3：所有相机必须使用SIMPLE_RADIAL模型，且不能共享内参
+  // SIMPLE_RADIAL是一种简单的相机模型，只包含焦距、主点和一个径向畸变参数
+  std::set<camera_t> camera_ids; // 用于跟踪已处理的相机ID，确保不重复
+  for (const auto& image : reconstruction.Images()) { // 遍历所有图像
+    if (image.second.IsRegistered()) { // 只检查已注册的图像
+      // 检查该相机ID是否已经出现过(共享内参检查)
+      // 同时检查相机模型是否为SIMPLE_RADIAL
       if (camera_ids.count(image.second.CameraId()) != 0 ||
           reconstruction.Camera(image.second.CameraId()).ModelId() !=
               SimpleRadialCameraModel::model_id) {
-        return false;
+        return false; // 不满足条件，返回不支持
       }
+      // 将当前相机ID添加到已处理集合中
       camera_ids.insert(image.second.CameraId());
     }
   }

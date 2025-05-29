@@ -177,28 +177,52 @@ void Reconstruction::AddLidarPointInGlobal(const point3D_t& point3D_id, LidarPoi
   lidar_points_in_global_.insert({point3D_id, lidar_point});
 }
 
+/**
+ * 向重建中添加新的3D点
+ * 
+ * 该函数创建一个新的3D点，将其与对应的2D特征点观测关联起来，
+ * 并设置点的位置、颜色和观测轨迹。这是SfM重建中的核心操作之一。
+ * 
+ * @param xyz 3D点的坐标
+ * @param track 观测轨迹，包含看到该3D点的所有图像和对应的2D点索引
+ * @param color 3D点的颜色（默认为黑色）
+ * @return 新创建的3D点ID
+ */
 point3D_t Reconstruction::AddPoint3D(const Eigen::Vector3d& xyz, Track track,
                                      const Eigen::Vector3ub& color) {
+  // 创建新的3D点ID，通过累加计数器确保唯一性
   const point3D_t point3D_id = ++num_added_points3D_;
+  // 确保该ID的3D点尚不存在
   CHECK(!ExistsPoint3D(point3D_id));
 
+  // 遍历轨迹中的所有元素（每个元素表示一个观测，即一个图像中的2D点）
   for (const auto& track_el : track.Elements()) {
+    // 获取对应图像的引用
     class Image& image = Image(track_el.image_id);
+    // 确保该2D点尚未关联到任何3D点
     CHECK(!image.Point2D(track_el.point2D_idx).HasPoint3D());
+    // 将2D点与新创建的3D点关联
     image.SetPoint3DForPoint2D(track_el.point2D_idx, point3D_id);
+    // 确保图像中的3D点数量不超过2D点数量
     CHECK_LE(image.NumPoints3D(), image.NumPoints2D());
   }
 
+  // 标记是否为继续的3D点（在这里设为false，表示是新创建的点）
   const bool kIsContinuedPoint3D = false;
 
+  // 遍历轨迹中的所有元素，将对应的观测标记为已三角化
   for (const auto& track_el : track.Elements()) {
     SetObservationAsTriangulated(track_el.image_id, track_el.point2D_idx,
                                  kIsContinuedPoint3D);
   }
 
+  // 在3D点映射中创建新点
   class Point3D& point3D = points3D_[point3D_id];
+  // 设置3D点的坐标
   point3D.SetXYZ(xyz);
+  // 设置3D点的观测轨迹（使用移动语义提高效率）
   point3D.SetTrack(std::move(track));
+  // 设置3D点的颜色
   point3D.SetColor(color);
 
   return point3D_id;

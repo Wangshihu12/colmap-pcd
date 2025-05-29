@@ -46,15 +46,28 @@ size_t TriangulateImage(const IncrementalMapperOptions& options,
   return num_tris;
 }
 
+/**
+ * 全局束调整控制函数 - 根据不同条件选择合适的全局束调整方法
+ * 
+ * 该函数作为控制器，负责根据当前重建状态和用户设置，
+ * 选择最合适的全局束调整方法：普通全局束调整、激光雷达约束的全局束调整或并行全局束调整。
+ * 
+ * @param options 增量式重建的控制选项集合
+ * @param mapper 增量式重建器指针，执行实际重建过程
+ */
 void AdjustGlobalBundle(const IncrementalMapperOptions& options,
                         IncrementalMapper* mapper) {
+  // 复制全局束调整选项，允许根据需要进行自定义修改
   BundleAdjustmentOptions custom_ba_options = options.GlobalBundleAdjustment();
 
+  // 获取当前已注册图像的数量
   const size_t num_reg_images = mapper->GetReconstruction().NumRegImages();
 
-  // Use stricter convergence criteria for first registered images.
-  const size_t kMinNumRegImagesForFastBA = 10;
+  // 对于较小规模的重建（前几张图像），使用更严格的收敛标准
+  // 这有助于建立稳定的初始结构，为后续重建打好基础
+  const size_t kMinNumRegImagesForFastBA = 10; // 快速BA的最小图像数阈值
   if (num_reg_images < kMinNumRegImagesForFastBA) {
+    // 增加优化精度：降低容差、增加迭代次数
     custom_ba_options.solver_options.function_tolerance /= 10;
     custom_ba_options.solver_options.gradient_tolerance /= 10;
     custom_ba_options.solver_options.parameter_tolerance /= 10;
@@ -62,17 +75,29 @@ void AdjustGlobalBundle(const IncrementalMapperOptions& options,
     custom_ba_options.solver_options.max_linear_solver_iterations = 200;
   }
 
+  // 打印全局束调整开始的标题
   PrintHeading1("Global bundle adjustment");
+
+  // 根据配置选择合适的全局束调整方法
   if (options.if_add_lidar_constraint) {
+    // 如果启用激光雷达约束，使用基于激光雷达的全局束调整
     mapper->AdjustGlobalBundleByLidar(options.Mapper(), custom_ba_options);  
   } else {
+    // 如果没有激光雷达约束，则在普通全局束调整和并行全局束调整之间选择
+    // 满足以下条件时使用并行束调整：
+    // 1. 用户启用了并行BA选项
+    // 2. 不需要固定已存在的图像
+    // 3. 已注册图像数量足够多
+    // 4. 并行BA支持当前的优化配置和重建场景
     if (options.ba_global_use_pba && !options.fix_existing_images &&
         num_reg_images >= kMinNumRegImagesForFastBA &&
         ParallelBundleAdjuster::IsSupported(custom_ba_options,
                                             mapper->GetReconstruction())) {
+      // 使用并行全局束调整，适合大规模场景
       mapper->AdjustParallelGlobalBundle(
           custom_ba_options, options.ParallelGlobalBundleAdjustment());
     } else {
+      // 使用标准全局束调整
       mapper->AdjustGlobalBundle(options.Mapper(), custom_ba_options);
     }
   }
@@ -113,31 +138,67 @@ void IterativeLocalRefinement(const IncrementalMapperOptions& options,
 
 }
 
+/**
+ * 迭代式全局优化函数 - 循环优化重建结果直至收敛
+ * 
+ * 该函数执行迭代式的全局优化过程，包括重三角化、全局束调整、轨迹合并和过滤等步骤，
+ * 通过多次迭代来提高三维重建结果的精度和完整性，直到达到收敛条件。
+ * 
+ * @param options 增量式重建的控制选项集合
+ * @param mapper 增量式重建器指针，执行实际重建过程
+ */
 void IterativeGlobalRefinement(const IncrementalMapperOptions& options,
                                IncrementalMapper* mapper) {
+  // 打印重三角化阶段标题
   PrintHeading1("Retriangulation");
+
+  // 先执行一次轨迹完成和合并操作
+  // 这将尝试为未三角化的特征点创建3D点，并合并重复的3D点轨迹
   CompleteAndMergeTracks(options, mapper);
+
+  // 执行重三角化，尝试改进现有3D点的位置或重建失败的点
+  // 并输出成功重三角化的观测数量
   std::cout << "  => Retriangulated observations: "
             << mapper->Retriangulate(options.Triangulation()) << std::endl;
 
+  // 执行多轮迭代优化，直到达到最大迭代次数或收敛
   for (int i = 0; i < options.ba_global_max_refinements; ++i) {
+    // 记录当前观测点总数，用于计算变化率
     const size_t num_observations =
         mapper->GetReconstruction().ComputeNumObservations();
+
+    // 记录本轮迭代中变化的观测点数量
     size_t num_changed_observations = 0;
+
+    // 执行全局束调整，优化所有相机参数和3D点坐标
     AdjustGlobalBundle(options, mapper);
+
+    // 再次完成和合并轨迹，并累加变化的观测点数
+    // 优化后的相机参数可能使之前失败的三角化成功
     num_changed_observations += CompleteAndMergeTracks(options, mapper);
+
+    // 过滤低质量的3D点，并累加被过滤的观测点数
     num_changed_observations += FilterPoints(options, mapper);
+
+    // 计算变化率：变化的观测点数占总观测点数的比例
+    // 避免除以零的情况
     const double changed =
         num_observations == 0
             ? 0
             : static_cast<double>(num_changed_observations) / num_observations;
+
+    // 输出本轮迭代的变化率
     std::cout << StringPrintf("  => Changed observations: %.6f", changed)
               << std::endl;
+
+    // 如果变化率低于阈值，认为已收敛，提前结束迭代
     if (changed < options.ba_global_max_refinement_change) {
       break;
     }
   }
 
+  // 迭代结束后，过滤冗余或低质量的图像
+  // 这可能移除注册失败或对重建贡献很少的图像
   FilterImages(options, mapper);
 }
 
@@ -372,41 +433,62 @@ IncrementalMapperController::IncrementalMapperController(
   RegisterCallback(LAST_IMAGE_REG_CALLBACK);
 }
 
+/**
+ * 增量式重建控制器的主运行函数 - 整个重建过程的入口点
+ * 
+ * 该函数是COLMAP增量式重建的顶层控制函数，负责初始化和执行完整的重建流程，
+ * 包括数据库加载、初始重建以及在初始化失败时进行自适应参数放宽的尝试。
+ */
 void IncrementalMapperController::Run() {
 
+  // 加载特征数据库，包含图像、特征点和匹配信息
+  // 如果加载失败，直接终止重建过程
   if (!LoadDatabase()) {
     return;
   }
 
+  // 如果启用了导入位姿先验选项，尝试加载已有的相机位姿
+  // 这通常用于使用外部位姿信息辅助重建
   if (options_->if_import_pose_prior) {
     if (!LoadPose()) {
       return;
     }
   }
 
+  // 创建初始重建选项的副本，用于后续可能的参数调整
   IncrementalMapper::Options init_mapper_options = options_->Mapper();
 
+  // 使用初始参数尝试执行重建
   Reconstruct(init_mapper_options);
 
+  // 定义最大放宽初始化参数的次数
+  // 如果初始参数下重建失败，将逐步放宽约束条件再次尝试
   const size_t kNumInitRelaxations = 2;
   for (size_t i = 0; i < kNumInitRelaxations; ++i) {
+    // 如果已经成功重建或用户中止，则退出放宽循环
     if (reconstruction_manager_->Size() > 0 || IsStopped()) {
       break;
     }
 
+    // 第一次放宽：减少所需的内点数量
+    // 这降低了图像对初始化时所需匹配点的数量门槛
     std::cout << "  => Relaxing the initialization constraints." << std::endl;
-    init_mapper_options.init_min_num_inliers /= 2;
-    Reconstruct(init_mapper_options);
+    init_mapper_options.init_min_num_inliers /= 2; // 将最小内点数减半
+    Reconstruct(init_mapper_options); // 使用新参数再次尝试重建
 
+    // 检查是否成功或中止
     if (reconstruction_manager_->Size() > 0 || IsStopped()) {
       break;
     }
 
+    // 第二次放宽：减小三角化所需的最小角度
+    // 这允许在视差较小的情况下也能初始化重建
     std::cout << "  => Relaxing the initialization constraints." << std::endl;
-    init_mapper_options.init_min_tri_angle /= 2;
-    Reconstruct(init_mapper_options);
+    init_mapper_options.init_min_tri_angle /= 2; // 将最小三角化角度减半
+    Reconstruct(init_mapper_options); // 使用新参数再次尝试重建
   }
 
+  // 打印整个重建过程的耗时（分钟为单位）
   GetTimer().PrintMinutes();
 }
 
@@ -452,61 +534,84 @@ int IncrementalMapperController::OriginImagesNum() {
   return num;
 }
 
+/**
+ * 增量式三维重建主控函数 - 执行完整的SfM重建流程
+ * 
+ * 该函数是COLMAP增量式重建的核心控制器，管理整个重建过程，
+ * 包括初始化、增量式图像注册、三角化、局部和全局优化等所有步骤。
+ * 
+ * @param init_mapper_options 增量式重建的初始配置选项
+ */
 void IncrementalMapperController::Reconstruct(
     const IncrementalMapper::Options& init_mapper_options) {
+  // 定义重建失败时是否丢弃当前重建
   const bool kDiscardReconstruction = true;
 
   //////////////////////////////////////////////////////////////////////////////
   // Main loop
   //////////////////////////////////////////////////////////////////////////////
 
+  // 创建增量式重建器对象
   IncrementalMapper mapper(&database_cache_);
+
+  // 如果启用了导入位姿先验选项，加载已有的图像位姿
   if (options_->if_import_pose_prior) {
     mapper.LoadExistedImagePoses(image_poses_);
   }
 
+  // 如果启用了激光雷达约束，加载点云数据
   if (options_->if_add_lidar_constraint || options_->if_add_lidar_corresponding){
     std::string path = options_->lidar_pointcloud_path;
     mapper.LoadPointcloud(path, options_->PcdProjector());
   }
 
-  // Is there a sub-model before we start the reconstruction? I.e. the user
-  // has imported an existing reconstruction.
+  // 检查是否存在初始重建（用户导入的重建）
   const bool initial_reconstruction_given = reconstruction_manager_->Size() > 0;
+  // 确保最多只有一个初始重建
   CHECK_LE(reconstruction_manager_->Size(), 1) << "Can only resume from a "
                                                   "single reconstruction, but "
                                                   "multiple are given.";
 
+  // 多次尝试重建循环，允许在初始化失败时尝试不同的初始图像对
   for (int num_trials = 0; num_trials < options_->init_num_trials;
        ++num_trials) {
+    // 检查暂停和停止信号
     BlockIfPaused();
     if (IsStopped()) {
       break;
     }
 
+    // 创建或使用重建对象
     size_t reconstruction_idx;
     if (!initial_reconstruction_given || num_trials > 0) {
+      // 如果没有初始重建或者是重试，创建新的重建
       reconstruction_idx = reconstruction_manager_->Add();
     } else {
+      // 使用已有的初始重建
       reconstruction_idx = 0;
     }
     Reconstruction& reconstruction =
         reconstruction_manager_->Get(reconstruction_idx);
+
+    // 开始一个新的重建过程
     mapper.BeginReconstruction(&reconstruction);
 
     ////////////////////////////////////////////////////////////////////////////
     // Register initial pair
     ////////////////////////////////////////////////////////////////////////////
 
+    // 如果当前重建中没有已注册的图像，需要选择并注册初始图像对
     if (reconstruction.NumRegImages() == 0) {
+      // 初始化图像ID，可以是用户指定的或自动选择的
       image_t image_id1 = static_cast<image_t>(options_->init_image_id1);
       image_t image_id2 = static_cast<image_t>(options_->init_image_id2);
 
-      // Try to find good initial pair.
+      // 如果没有指定初始图像对，自动寻找合适的初始对
       if (options_->init_image_id1 == -1 || options_->init_image_id2 == -1) {
         PrintHeading1("Finding good initial image pair");
         const bool find_init_success = mapper.FindInitialImagePair(
             init_mapper_options, &image_id1, &image_id2);
+        // 如果找不到好的初始图像对，放弃当前尝试
         if (!find_init_success) {
           std::cout << "  => No good initial image pair found." << std::endl;
           mapper.EndReconstruction(kDiscardReconstruction);
@@ -514,6 +619,7 @@ void IncrementalMapperController::Reconstruct(
           break;
         }
       } else {
+        // 检查用户指定的初始图像对是否存在
         if (!reconstruction.ExistsImage(image_id1) ||
             !reconstruction.ExistsImage(image_id2)) {
           std::cout << StringPrintf(
@@ -525,19 +631,26 @@ void IncrementalMapperController::Reconstruct(
           return;
         }
       }
+
+      // 开始使用选定的初始图像对初始化重建
       PrintHeading1(StringPrintf("Initializing with image pair #%d and #%d",
                                  image_id1, image_id2));
       // input: IncrementalMapper::Options init_mapper_options
       // input: initial image pair
+
+      // 根据是否使用激光雷达约束选择不同的初始化方法
       bool reg_init_success;
       if (options_->if_add_lidar_constraint){
+        // 使用深度投影方法初始化
         reg_init_success = mapper.RegisterInitialImagePairByDepthProj(
           init_mapper_options, image_id1, image_id2);
       } else {
+        // 使用传统方法初始化
         reg_init_success = mapper.RegisterInitialImagePair(
             init_mapper_options, image_id1, image_id2);
       } 
           
+      // 初始化失败，提供可能的解决方案
       if (!reg_init_success) {
         std::cout << "  => Initialization failed - possible solutions:"
                   << std::endl
@@ -550,18 +663,19 @@ void IncrementalMapperController::Reconstruct(
         break;
       }
 
+      // 对初始结构执行全局束调整
       AdjustGlobalBundle(*options_, &mapper);
 
+      // 过滤低质量的点和图像
       FilterPoints(*options_, &mapper);
       FilterImages(*options_, &mapper);
  
-      // Initial image pair failed to register.
+      // 如果初始化后没有成功注册图像或三角化点，放弃当前尝试
       if (reconstruction.NumRegImages() == 0 ||
           reconstruction.NumPoints3D() == 0) {
         mapper.EndReconstruction(kDiscardReconstruction);
         reconstruction_manager_->Delete(reconstruction_idx);
-        // If both initial images are manually specified, there is no need for
-        // further initialization trials.
+        // 如果初始图像对是手动指定的，不再尝试其他初始对
         if (options_->init_image_id1 != -1 && options_->init_image_id2 != -1) {
           break;
         } else {
@@ -569,25 +683,29 @@ void IncrementalMapperController::Reconstruct(
         }
       }
 
+      // 如果需要，提取并设置3D点的颜色
       if (options_->extract_colors) {
         ExtractColors(image_path_, image_id1, &reconstruction);
       }
     }
-    // After the initial image pair is registered, 
-    // called callback in the thread to trigger the rendering mechanism in the mainwindow
+    
+    // 初始图像对注册成功后，触发回调（通常用于可视化）
     Callback(INITIAL_IMAGE_PAIR_REG_CALLBACK);
 
     ////////////////////////////////////////////////////////////////////////////
     // Incremental mapping
     ////////////////////////////////////////////////////////////////////////////
 
+    // 记录重建状态，用于决定何时执行全局优化
     size_t snapshot_prev_num_reg_images = reconstruction.NumRegImages();
     size_t ba_prev_num_reg_images = reconstruction.NumRegImages();
     size_t ba_prev_num_points = reconstruction.NumPoints3D();
 
-    bool reg_next_success = true;
-    bool prev_reg_next_success = true;
+    // 增量式重建的主循环
+    bool reg_next_success = true; // 注册下一张图像是否成功
+    bool prev_reg_next_success = true; // 上一次注册是否成功
     while (reg_next_success) {
+      // 检查暂停和停止信号
       BlockIfPaused();
       if (IsStopped()) {
         break;
@@ -595,12 +713,16 @@ void IncrementalMapperController::Reconstruct(
 
       reg_next_success = false;
 
+      // 寻找下一批要注册的图像
       const std::vector<image_t> next_images =
           mapper.FindNextImages(options_->Mapper());
 
+      // 如果没有更多图像可注册，结束增量式重建
       if (next_images.empty()) {
         break;
       }
+
+      // 尝试注册候选图像列表中的图像
       for (size_t reg_trial = 0; reg_trial < next_images.size(); ++reg_trial) {
         const image_t next_image_id = next_images[reg_trial];
         const Image& next_image = reconstruction.Image(next_image_id);
@@ -608,18 +730,27 @@ void IncrementalMapperController::Reconstruct(
         PrintHeading1(StringPrintf("Registering image #%d (%d)", next_image_id,
                                    reconstruction.NumRegImages() + 1));
 
+        // 显示该图像能看到多少已重建的3D点
         std::cout << StringPrintf("  => Image sees %d / %d points",
                                   next_image.NumVisiblePoints3D(),
                                   next_image.NumObservations())
                   << std::endl;
 
+        // 注册下一张图像
         reg_next_success =
             mapper.RegisterNextImage(options_->Mapper(), next_image_id);
 
+        // 如果注册成功
         if (reg_next_success) {
+          // 清除前一次的激光雷达点匹配结果
           mapper.ClearLidarPoints();
+          // 对新注册图像执行三角化，创建新的3D点
           TriangulateImage(*options_, next_image, &mapper);
+          // 对新注册图像执行局部优化
           IterativeLocalRefinement(*options_, next_image_id, &mapper);
+
+          // 检查是否需要执行全局优化
+          // 条件：已注册图像数量或3D点数量相对上次全局BA有显著增加
           if (reconstruction.NumRegImages() >=
                   options_->ba_global_images_ratio * ba_prev_num_reg_images ||
               reconstruction.NumRegImages() >=
@@ -628,15 +759,21 @@ void IncrementalMapperController::Reconstruct(
                   options_->ba_global_points_ratio * ba_prev_num_points ||
               reconstruction.NumPoints3D() >=
                   options_->ba_global_points_freq + ba_prev_num_points) {
+
+            // 执行全局优化
             IterativeGlobalRefinement(*options_, &mapper);
+
+            // 更新上次全局优化时的状态
             ba_prev_num_points = reconstruction.NumPoints3D();
             ba_prev_num_reg_images = reconstruction.NumRegImages();
           }
 
+          // 如果需要，提取并设置新注册图像中3D点的颜色
           if (options_->extract_colors) {
             ExtractColors(image_path_, next_image_id, &reconstruction);
           }
 
+          // 如果达到快照频率，保存当前重建的快照
           if (options_->snapshot_images_freq > 0 &&
               reconstruction.NumRegImages() >=
                   options_->snapshot_images_freq +
@@ -645,15 +782,17 @@ void IncrementalMapperController::Reconstruct(
             WriteSnapshot(reconstruction, options_->snapshot_path);
           }
 
+          // 触发图像注册成功的回调
           Callback(NEXT_IMAGE_REG_CALLBACK);
 
+          // 成功注册一张图像后，退出当前尝试循环
           break;
         } else {
+          // 注册失败，尝试下一张候选图像
           std::cout << "  => Could not register, trying another image."
                     << std::endl;
 
-          // If initial pair fails to continue for some time,
-          // abort and try different initial pair.
+          // 如果初始阶段长时间无法继续注册新图像，考虑放弃当前初始对
           const size_t kMinNumInitialRegTrials = 30;
           if (reg_trial >= kMinNumInitialRegTrials &&
               reconstruction.NumRegImages() <
@@ -663,17 +802,19 @@ void IncrementalMapperController::Reconstruct(
         }
       }
 
+      // 检查当前模型与之前模型的重叠图像数量
+      // 如果重叠过多，停止当前模型的重建（用于多模型重建场景）
       const size_t max_model_overlap =
           static_cast<size_t>(options_->max_model_overlap);
       if (mapper.NumSharedRegImages() >= max_model_overlap) {
         break;
       }
 
-      // If no image could be registered, try a single final global iterative
-      // bundle adjustment and try again to register one image. If this fails
-      // once, then exit the incremental mapping.
+      // 如果本轮没有成功注册任何图像但上一轮成功了
+      // 尝试执行一次全局优化后再试一次注册
+      // 这是最后的"挽救"措施
       if (!reg_next_success && prev_reg_next_success) {
-        reg_next_success = true;
+        reg_next_success = true; // 允许再尝试一次
         prev_reg_next_success = false;
         IterativeGlobalRefinement(*options_, &mapper);
       } else {
@@ -681,36 +822,47 @@ void IncrementalMapperController::Reconstruct(
       }
     }
 
+    // 如果收到停止信号，结束当前重建但不丢弃结果
     if (IsStopped()) {
       const bool kDiscardReconstruction = false;
       mapper.EndReconstruction(kDiscardReconstruction);
       break;
     }
 
-    // Only run final global BA, if last incremental BA was not global.
+    // 如果最后一次增量BA不是全局性的，执行最终的全局优化
     if (reconstruction.NumRegImages() >= 2 &&
         reconstruction.NumRegImages() != ba_prev_num_reg_images &&
         reconstruction.NumPoints3D() != ba_prev_num_points) {
       IterativeGlobalRefinement(*options_, &mapper);
     }
 
-    // If the total number of images is small then do not enforce the minimum
-    // model size so that we can reconstruct small image collections.
+    // 根据重建的规模决定是否保留当前重建
+    // 对于小型图像集合，放宽最小模型大小的要求
     const size_t min_model_size =
         std::min(database_cache_.NumImages(),
                  static_cast<size_t>(options_->min_model_size));
+
+    // 如果启用了多模型重建且当前模型太小，或者没有注册任何图像，丢弃当前重建
     if ((options_->multiple_models &&
          reconstruction.NumRegImages() < min_model_size) ||
         reconstruction.NumRegImages() == 0) {
       mapper.EndReconstruction(kDiscardReconstruction);
       reconstruction_manager_->Delete(reconstruction_idx);
     } else {
+      // 否则保留当前重建
       const bool kDiscardReconstruction = false;
       mapper.EndReconstruction(kDiscardReconstruction);
     }
 
+    // 触发最后一张图像注册的回调
     Callback(LAST_IMAGE_REG_CALLBACK);
 
+    // 决定是否继续尝试创建更多模型
+    // 如果满足以下任一条件，停止创建新模型：
+    // 1. 已经有初始重建
+    // 2. 不允许多模型重建
+    // 3. 已达到最大模型数量
+    // 4. 几乎所有图像都已注册
     const size_t max_num_models = static_cast<size_t>(options_->max_num_models);
     if (initial_reconstruction_given || !options_->multiple_models ||
         reconstruction_manager_->Size() >= max_num_models ||

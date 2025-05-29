@@ -383,55 +383,87 @@ bool IncrementalMapper::RegisterInitialImagePair(const Options& options,
 
   return true;
 }
+
+/**
+ * 基于深度投影方法注册初始图像对
+ * 
+ * 该函数利用激光雷达点云数据辅助初始化第一对图像，与传统方法不同，
+ * 它先为第一张图像赋予初始位姿，然后使用点云数据获取特征点的3D坐标，
+ * 最后通过PnP算法估计第二张图像的位姿，建立初始重建结构。
+ * 
+ * @param options 重建配置选项
+ * @param image_id1 第一张图像ID
+ * @param image_id2 第二张图像ID
+ * @return 初始化是否成功
+ */
 bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& options,
                                                             const image_t image_id1,
                                                             const image_t image_id2){
+
+  // 确保重建对象存在且尚未注册任何图像
   CHECK_NOTNULL(reconstruction_);
   CHECK_EQ(reconstruction_->NumRegImages(), 0);
 
+  // 检查选项参数是否合法
   CHECK(options.Check());
 
+  // 更新初始化尝试计数器和总注册尝试计数器
   init_num_reg_trials_[image_id1] += 1;
   init_num_reg_trials_[image_id2] += 1;
   num_reg_trials_[image_id1] += 1;
   num_reg_trials_[image_id2] += 1;
 
+  // 计算图像对的唯一ID并记录为已尝试
   const image_pair_t pair_id =
       Database::ImagePairToPairId(image_id1, image_id2);
   init_image_pairs_.insert(pair_id);
 
+  // 获取图像和相机对象的引用
   Image& image1 = reconstruction_->Image(image_id1);
   Camera& camera1 = reconstruction_->Camera(image1.CameraId());
 
   Image& image2 = reconstruction_->Image(image_id2);
   Camera& camera2 = reconstruction_->Camera(image2.CameraId());
 
-  // Give initial pose to the first image
+  // 为第一张图像指定初始位姿
+  // 根据配置选项中的欧拉角(roll, pitch, yaw)和位置坐标创建旋转矩阵和平移向量
   double roll = DegToRad(options.init_image_roll);
   double pitch = -DegToRad(options.init_image_pitch);
   double yaw = -DegToRad(options.init_image_yaw);
   //Eigen::Vector3d eulerAngle(roll, pitch, yaw);
+
+  // 使用轴角表示创建旋转矩阵
   Eigen::AngleAxisd rollAngle(Eigen::AngleAxisd(roll,Eigen::Vector3d::UnitZ()));
   Eigen::AngleAxisd pitchAngle(Eigen::AngleAxisd(pitch,Eigen::Vector3d::UnitX()));
   Eigen::AngleAxisd yawAngle(Eigen::AngleAxisd(yaw,Eigen::Vector3d::UnitY()));
  
+  // 组合欧拉角为完整的旋转矩阵
   Eigen::Matrix3d rotation_matrix;
   rotation_matrix = yawAngle * pitchAngle * rollAngle;
 
+  // 设置初始平移向量，注意坐标系转换
   Eigen::Vector3d t_init(-options.init_image_y, -options.init_image_z, options.init_image_x);
 
-  Eigen::Matrix3d R_wc = rotation_matrix;
-  Eigen::Vector3d t_wc = t_init;
-  Eigen::Matrix3d R_cw = R_wc.transpose();
-  Eigen::Vector3d t_cw = - R_cw * t_wc;
+  // 世界坐标系到相机坐标系的变换
+  Eigen::Matrix3d R_wc = rotation_matrix; // 世界到相机的旋转
+  Eigen::Vector3d t_wc = t_init; // 世界到相机的平移
+
+  // 相机坐标系到世界坐标系的变换（COLMAP内部使用）
+  Eigen::Matrix3d R_cw = R_wc.transpose(); // 相机到世界的旋转
+  Eigen::Vector3d t_cw = - R_cw * t_wc; // 相机到世界的平移
+
+  // 将旋转矩阵转换为四元数
   Eigen::Quaterniond q_cw(R_cw);
   Eigen::Vector4d q_cw_v;
-  q_cw_v << q_cw.w(),q_cw.x(),q_cw.y(),q_cw.z();
+  q_cw_v << q_cw.w(),q_cw.x(),q_cw.y(),q_cw.z(); // COLMAP使用w,x,y,z顺序
 
+  // 设置第一张图像的位姿
   image1.Qvec() = q_cw_v;
   image1.Tvec() = t_cw;
 
+  // 如果启用了位姿先验导入，尝试使用已有的位姿数据
   if (if_import_pose_prior_) {
+    // 查找第一张图像的先验位姿
     auto iter = existed_poses_.find(image1.ImageId());
     if (iter != existed_poses_.end()){
       std::vector<double> pose1 = iter->second;
@@ -442,6 +474,8 @@ bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& optio
       image1.SetQvec(q_cw1);
       image1.SetTvec(t_cw1);
     }
+
+    // 查找第二张图像的先验位姿
     iter = existed_poses_.find(image2.ImageId());
     if (iter != existed_poses_.end()){
       std::vector<double> pose2 = iter->second;
@@ -457,16 +491,21 @@ bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& optio
   // image1.Qvec() = ComposeIdentityQuaternion();
   // image1.Tvec() = Eigen::Vector3d(0, 0, 0);
 
+  // 获取两图像间的特征匹配
   const CorrespondenceGraph& correspondence_graph =
       database_cache_->CorrespondenceGraph();
   const FeatureMatches matches =
       correspondence_graph.FindCorrespondencesBetweenImages(image_id1,
                                                             image_id2);
+
+  // 准备数据结构存储第一张图像的2D点和对应的3D点
   std::vector<std::pair<Eigen::Vector2d, bool>,Eigen::aligned_allocator<std::pair<Eigen::Vector2d, bool>>> image1_point2ds;
   std::vector<Eigen::Vector2d,Eigen::aligned_allocator<Eigen::Vector2d>> image2_point2ds;
   std::vector<Eigen::Vector3d,Eigen::aligned_allocator<Eigen::Vector3d>> image1_pt_xyzs;
   image1_point2ds.reserve(matches.size());
   image1_pt_xyzs.reserve(matches.size());
+
+  // 收集匹配点的2D坐标
   for (const auto match : matches){
     const Point2D point2D_1 = image1.Point2D(match.point2D_idx1);
     image1_point2ds.push_back({point2D_1.XY(),false});
@@ -474,13 +513,18 @@ bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& optio
     image2_point2ds.push_back(point2D_2.XY());
   }
   
+  // 使用激光雷达点云投影获取第一张图像特征点的3D坐标
   lidar_pointcloud_process_->pcd_proj_->SetNewImage(image1,camera1,image1_point2ds,image1_pt_xyzs);
-  std::vector<Eigen::Vector2d> tri_points2D; 
-  std::vector<Eigen::Vector3d> tri_points3D; 
-  std::vector<point2D_t> image1_idxs;
-  std::vector<point2D_t> image2_idxs;
+
+  // 准备PnP所需的数据：成功获取3D坐标的点
+  std::vector<Eigen::Vector2d> tri_points2D;  // 第二张图像中的2D点
+  std::vector<Eigen::Vector3d> tri_points3D;  // 对应的3D点
+  std::vector<point2D_t> image1_idxs; // 第一张图像中的点索引
+  std::vector<point2D_t> image2_idxs; // 第二张图像中的点索引
+
+  // 筛选成功获取3D坐标的点对
   for (int i = 0; i < image1_point2ds.size(); i++){
-    if (image1_point2ds[i].second == false) continue;
+    if (image1_point2ds[i].second == false) continue; // 跳过未获取3D坐标的点
 
     tri_points2D.push_back(image2_point2ds[i]);
     tri_points3D.push_back(image1_pt_xyzs[i]);
@@ -488,6 +532,7 @@ bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& optio
     image2_idxs.push_back(matches[i].point2D_idx2);
   }
 
+  // 配置绝对位姿估计选项
   AbsolutePoseEstimationOptions abs_pose_options;
   abs_pose_options.num_threads = options.num_threads;
   abs_pose_options.num_focal_length_samples = 30;
@@ -496,50 +541,61 @@ bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& optio
   abs_pose_options.ransac_options.max_error = options.abs_pose_max_error;
   abs_pose_options.ransac_options.min_inlier_ratio =
       options.abs_pose_min_inlier_ratio;
-  // Use high confidence to avoid preemptive termination of P3P RANSAC
-  // - too early termination may lead to bad registration.
+  // 使用高置信度避免P3P RANSAC过早终止
   abs_pose_options.ransac_options.min_num_trials = 100;
   abs_pose_options.ransac_options.max_num_trials = 10000;
   abs_pose_options.ransac_options.confidence = 0.99999;
-  abs_pose_options.estimate_focal_length = false;
+  abs_pose_options.estimate_focal_length = false; // 不估计焦距
+
+  // 配置位姿优化选项
   AbsolutePoseRefinementOptions abs_pose_refinement_options;
   abs_pose_refinement_options.refine_focal_length = false;
   abs_pose_refinement_options.refine_extra_params = false;
 
+  // 使用PnP算法估计第二张图像的位姿
   size_t num_inliers;
   std::vector<char> inlier_mask;
   if (!EstimateAbsolutePose(abs_pose_options, tri_points2D, tri_points3D,
                             &image2.Qvec(), &image2.Tvec(), &camera2, &num_inliers,
                             &inlier_mask)) {
-    return false;
+    return false; // 位姿估计失败
   }
 
+  // 检查内点数量是否满足要求
   if (num_inliers < static_cast<size_t>(options.abs_pose_min_num_inliers)) {
     return false;
   }
 
+  // 优化第二张图像的位姿
   if (!RefineAbsolutePose(abs_pose_refinement_options, inlier_mask,
                           tri_points2D, tri_points3D, &image2.Qvec(),
                           &image2.Tvec(), &camera2)) {
     return false;
   }
 
+  // 注册两张图像到重建中
   reconstruction_->RegisterImage(image_id1);
   reconstruction_->RegisterImage(image_id2);
+
+  // 触发图像注册事件
   RegisterImageEvent(image_id1);
   RegisterImageEvent(image_id2);
+
+  // 创建特征点轨迹，每个轨迹连接两张图像中的对应点
   Track track;
   track.Reserve(2);
   track.AddElement(TrackElement());
   track.AddElement(TrackElement());
   track.Element(0).image_id = image_id1;
   track.Element(1).image_id = image_id2;
+
+  // 为内点创建3D点和轨迹
   for (size_t i = 0; i < inlier_mask.size(); ++i) {
-    if (inlier_mask[i]) {
+    if (inlier_mask[i]) { // 只处理内点
       track.Element(0).point2D_idx = image1_idxs[i];
       track.Element(1).point2D_idx = image2_idxs[i];
-      const Eigen::Vector3d xyz = tri_points3D[i];
-      reconstruction_->AddPoint3D(xyz, track);
+      const Eigen::Vector3d xyz = tri_points3D[i]; // 使用3D点坐标
+      reconstruction_->AddPoint3D(xyz, track); // 添加到重建中
     }
   }
 
@@ -772,33 +828,52 @@ size_t IncrementalMapper::MergeTracks(
   return triangulator_->MergeAllTracks(tri_options);
 }
 
-// incremental mapping optimization func
+/**
+ * 局部束调整函数 - 对新添加的图像及其相关图像进行局部优化
+ * 
+ * 该函数在增量式SfM重建过程中，为新注册的图像执行局部束调整，以优化相机参数和3D点坐标
+ * 同时支持与激光雷达点云数据的融合约束
+ * 
+ * @param options 增量式重建的全局选项
+ * @param ba_options 束调整的具体参数设置
+ * @param tri_options 三角化的参数设置
+ * @param image_id 当前新注册的图像ID
+ * @param point3D_ids 需要调整的3D点ID集合
+ * @return 局部束调整的结果报告，包含各类统计信息
+ */
 IncrementalMapper::LocalBundleAdjustmentReport
 IncrementalMapper::AdjustLocalBundle(
     const Options& options, 
     const BundleAdjustmentOptions& ba_options,
     const IncrementalTriangulator::Options& tri_options, const image_t image_id,
     const std::unordered_set<point3D_t>& point3D_ids) {
+  // 确保重建对象已初始化和选项合法性
   CHECK_NOTNULL(reconstruction_);
   CHECK(options.Check());
 
+  // 初始化报告结构
   LocalBundleAdjustmentReport report;
 
-  // Find images that have most 3D points with given image in common.
+  // 查找与当前图像共享最多3D点的相关图像集合
   const std::vector<image_t> local_bundle = FindLocalBundle(options, image_id);
 
   std::cout<<std::endl;
-  // Do the bundle adjustment only if there is any connected images.
+  // 只有当找到相关图像时才执行束调整
   if (local_bundle.size() > 0) {
+    // 创建束调整配置对象
     BundleAdjustmentConfig ba_config;
+    // 如果启用激光雷达约束，则添加点云数据
     if (ba_options.if_add_lidar_constraint || ba_options.if_add_lidar_corresponding){
       ba_config.AddPointcloud(lidar_pointcloud_process_);
     }
 
+    // 将当前图像添加到优化配置中
     ba_config.AddImage(image_id);
 
+    // 检查初始图像是否在局部束中
     bool if_first_image_exist = false;
 
+    // 将局部束中的所有相关图像添加到优化配置中
     for (const image_t local_image_id : local_bundle) {
       if (local_image_id == options.init_image_id1){
           if_first_image_exist = true;
@@ -808,13 +883,16 @@ IncrementalMapper::AdjustLocalBundle(
     // for (const image_t local_image_id : local_bundle) {
     //   ba_config.AddImage(local_image_id);
     // }
+
+    // 当启用激光雷达约束，且初始图像存在，且注册图像数量少于阈值时，固定初始图像的位姿
+    // 这有助于建立一个稳定的全局坐标系
     if (ba_options.if_add_lidar_constraint && 
         if_first_image_exist && 
         reconstruction_->NumRegImages() < options.first_image_fixed_frames){
       ba_config.SetConstantPose(options.init_image_id1);
     } 
 
-    // Fix the existing images, if option specified.
+    // 如果选项指定，固定已存在的图像位姿
     if (options.fix_existing_images) {
       for (const image_t local_image_id : local_bundle) {
         if (existing_image_ids_.count(local_image_id)) {
@@ -823,14 +901,16 @@ IncrementalMapper::AdjustLocalBundle(
       }
     }
 
-    // Determine which cameras to fix, when not all the registered images
-    // are within the current local bundle.
+    // 统计每个相机模型对应的图像数量
+    // 这用于决定哪些相机参数应该固定
     std::unordered_map<camera_t, size_t> num_images_per_camera;
     for (const image_t image_id : ba_config.Images()) {
       const Image& image = reconstruction_->Image(image_id);
       num_images_per_camera[image.CameraId()] += 1;
     }
 
+    // 如果局部束中某相机的图像数少于该相机的已注册总图像数
+    // 则固定该相机参数，避免过度优化导致不稳定
     for (const auto& camera_id_and_num_images_pair : num_images_per_camera) {
       const size_t num_reg_images_for_camera =
           num_reg_images_per_camera_.at(camera_id_and_num_images_pair.first);
@@ -839,12 +919,16 @@ IncrementalMapper::AdjustLocalBundle(
       }
     }
 
-    // Fix 7 DOF to avoid scale/rotation/translation drift in bundle adjustment.
+    // 固定7自由度(7 DoF)，防止束调整中的尺度/旋转/平移漂移
+    // 只有在不使用激光雷达约束时才需要，因为激光雷达点云已提供了尺度信息
     if (!ba_options.if_add_lidar_constraint) {
       if (local_bundle.size() == 1) {
+        // 如果只有一个相关图像，固定其位姿并固定当前图像的一个平移分量
         ba_config.SetConstantPose(local_bundle[0]);
         ba_config.SetConstantTvec(image_id, {0});
       } else if (local_bundle.size() > 1) {
+        // 如果有多个相关图像，固定最后一个图像的位姿
+        // 并固定倒数第二个图像的一个平移分量(除非它是已存在的需要固定的图像)
         const image_t image_id1 = local_bundle[local_bundle.size() - 1];
         const image_t image_id2 = local_bundle[local_bundle.size() - 2];
         ba_config.SetConstantPose(image_id1);
@@ -855,21 +939,22 @@ IncrementalMapper::AdjustLocalBundle(
       }
     }
 
-    // Make sure, we refine all new and short-track 3D points, no matter if
-    // they are fully contained in the local image set or not. Do not include
-    // long track 3D points as they are usually already very stable and adding
-    // to them to bundle adjustment and track merging/completion would slow
-    // down the local bundle adjustment significantly.
+    // 收集需要优化的3D点集合
+    // 针对新的和短轨迹的3D点进行优化，长轨迹点通常已经很稳定，不需要频繁优化
     std::unordered_set<point3D_t> variable_point3D_ids;
     std::unordered_set<point3D_t> pcdproj_point3D_ids;
     std::unordered_set<point3D_t> search_closest_point3D_ids;
+
+    // 如果启用激光雷达约束
     if (ba_options.if_add_lidar_constraint) {
       for (const point3D_t point3D_id : point3D_ids) {
         const Point3D& point3D = reconstruction_->Point3D(point3D_id);
+        // 轨迹长度阈值较大，因为激光雷达约束下更多点需要优化
         const size_t kMaxTrackLength = 1000;
         if (!point3D.HasError() || point3D.Track().Length() <= kMaxTrackLength) {
           ba_config.AddVariablePoint(point3D_id);
           variable_point3D_ids.insert(point3D_id);
+          // 根据轨迹长度分类点，短轨迹点用于投影匹配，长轨迹点用于最近点搜索
           if (point3D.Track().Length() < options.min_proj_num + 3){
             pcdproj_point3D_ids.insert(point3D_id);
           } else {
@@ -878,6 +963,7 @@ IncrementalMapper::AdjustLocalBundle(
         }
       }
     } else {
+      // 不使用激光雷达约束时，使用较小的轨迹长度阈值
       for (const point3D_t point3D_id : point3D_ids) {
         const Point3D& point3D = reconstruction_->Point3D(point3D_id);
         const size_t kMaxTrackLength = 15;
@@ -888,20 +974,28 @@ IncrementalMapper::AdjustLocalBundle(
       }
     }
 
+    // 如果启用激光雷达约束或对应关系
     if (ba_options.if_add_lidar_constraint || ba_options.if_add_lidar_corresponding){
+      // 处理短轨迹点：先投影到图像，再匹配到激光雷达点
       for (auto iter = pcdproj_point3D_ids.begin(); iter != pcdproj_point3D_ids.end(); iter++){
+        // 获取短轨迹点ID
         const point3D_t point3D_id = *iter;
+        // 设置特征匹配阈值
         int threshold = ba_options.ba_match_features_threshold;
+        // 投影到图像
         ba_config.Project2Image(reconstruction_,point3D_id, image_id, threshold);
       }
+      // 处理短轨迹点：匹配到激光雷达点
       for (auto iter = pcdproj_point3D_ids.begin(); iter != pcdproj_point3D_ids.end(); iter++){
         const point3D_t point3D_id = *iter;
         ba_config.MatchVariablePoint2LidarPoint(reconstruction_,point3D_id);
       }
 
+      // 处理长轨迹点：直接搜索最近的激光雷达点
       for (auto iter = search_closest_point3D_ids.begin(); iter != search_closest_point3D_ids.end(); iter++){
         const point3D_t point3D_id = *iter;
         // const Point3D& point3D = reconstruction_->Point3D(point3D_id);
+        // 根据点被优化次数动态调整搜索范围
         int opt_num = reconstruction_->Point3D(point3D_id).GlobalOptNum();
         double max_search_range = options.kdtree_max_search_range - opt_num * options.search_range_drop_speed;
         if (max_search_range <= options.kdtree_min_search_range) {
@@ -912,42 +1006,45 @@ IncrementalMapper::AdjustLocalBundle(
     }
 
     
-    // Adjust the local bundle.
+    // 执行局部束调整
     BundleAdjuster bundle_adjuster(ba_options, ba_config);
     const BundleAdjuster::OptimazePhrase phrase = BundleAdjuster::OptimazePhrase::Local;
     bundle_adjuster.SetOptimazePhrase(phrase);
     bundle_adjuster.Solve(reconstruction_);
 
+    // 记录调整的观测点数量
     report.num_adjusted_observations =
         bundle_adjuster.Summary().num_residuals / 2;
 
-    // Merge refined tracks with other existing points.
+    // 合并优化后的轨迹与其他现有点
     report.num_merged_observations =
         triangulator_->MergeTracks(tri_options, variable_point3D_ids);
-    // Complete tracks that may have failed to triangulate before refinement
-    // of camera pose and calibration in bundle-adjustment. This may avoid
-    // that some points are filtered and it helps for subsequent image
-    // registrations.
+    // 完成之前可能因相机参数不准确而失败的轨迹三角化
+    // 这有助于避免一些点被过滤掉，并有助于后续图像注册
     report.num_completed_observations =
         triangulator_->CompleteTracks(tri_options, variable_point3D_ids);
     report.num_completed_observations +=
         triangulator_->CompleteImage(tri_options, image_id);
   }
 
-  // Filter both the modified images and all changed 3D points to make sure
-  // there are no outlier points in the model. This results in duplicate work as
-  // many of the provided 3D points may also be contained in the adjusted
-  // images, but the filtering is not a bottleneck at this point.
+  // 过滤修改后的图像和所有变化的3D点，确保模型中没有离群点
+  // 虽然这会导致重复工作(因为许多3D点可能同时存在于多个调整的图像中)
+  // 但在此阶段过滤不是性能瓶颈
   std::unordered_set<image_t> filter_image_ids;
   filter_image_ids.insert(image_id);
   filter_image_ids.insert(local_bundle.begin(), local_bundle.end());
 
+  // 过滤图像中的3D点，根据重投影误差和三角化角度
   report.num_filtered_observations = reconstruction_->FilterPoints3DInImages(
       options.filter_max_reproj_error, options.filter_min_tri_angle,
       filter_image_ids);
+
+  // 过滤指定的3D点集合
   report.num_filtered_observations += reconstruction_->FilterPoints3D(
       options.filter_max_reproj_error, options.filter_min_tri_angle,
       point3D_ids);
+
+  // 如果启用激光雷达约束，还需要过滤激光雷达离群点
   if (ba_options.if_add_lidar_constraint) {
     report.num_filtered_observations += reconstruction_->FilterLidarOutlier(
         options.proj_max_dist_error,options.icp_max_dist_error);
@@ -955,26 +1052,42 @@ IncrementalMapper::AdjustLocalBundle(
   return report;
 }
 
+/**
+ * 全局束调整函数 - 对整个重建场景进行全局优化
+ * 
+ * 该函数在增量式SfM重建过程中阶段性地执行全局束调整，优化所有相机参数和3D点坐标，
+ * 以减小累积误差，提高整体重建精度。
+ * 
+ * @param options 增量式重建的全局选项
+ * @param ba_options 束调整的具体参数设置
+ * @return 优化是否成功
+ */
 bool IncrementalMapper::AdjustGlobalBundle(
     const Options& options, const BundleAdjustmentOptions& ba_options) {
+  // 确保重建对象已初始化
   CHECK_NOTNULL(reconstruction_);
 
+  // 获取所有已注册图像的ID列表
   const std::vector<image_t>& reg_image_ids = reconstruction_->RegImageIds();
 
+  // 确保至少有两个已注册图像，这是全局束调整的最低要求
   CHECK_GE(reg_image_ids.size(), 2) << "At least two images must be "
                                        "registered for global "
                                        "bundle-adjustment";
 
-  // Avoid degeneracies in bundle adjustment.
+  // 过滤具有负深度的观测点，避免束调整中出现退化情况
+  // 负深度表示点位于相机后方，这在物理上是不可能的
   reconstruction_->FilterObservationsWithNegativeDepth();
 
-  // Configure bundle adjustment.
+  // 创建并配置束调整参数
   BundleAdjustmentConfig ba_config;
+  // 将所有已注册图像添加到优化配置中
   for (const image_t image_id : reg_image_ids) {
     ba_config.AddImage(image_id);
   }
 
-  // Fix the existing images, if option specified.
+  // 如果选项指定，固定已存在的图像位姿
+  // 这通常用于增量式重建中，避免破坏已经重建好的部分
   if (options.fix_existing_images) {
     for (const image_t image_id : reg_image_ids) {
       if (existing_image_ids_.count(image_id)) {
@@ -983,50 +1096,70 @@ bool IncrementalMapper::AdjustGlobalBundle(
     }
   }
 
-  // Fix 7-DOFs of the bundle adjustment problem.
-  ba_config.SetConstantPose(reg_image_ids[0]);
+  // 固定7个自由度，解决全局束调整中的规模/旋转/平移不确定性问题
+  // 通常做法是固定第一个图像的所有位姿参数(6自由度)和第二个图像的一个平移分量(1自由度)
+  ba_config.SetConstantPose(reg_image_ids[0]); // 固定第一个图像的位姿(旋转和平移)
   if (!options.fix_existing_images ||
       !existing_image_ids_.count(reg_image_ids[1])) {
-    ba_config.SetConstantTvec(reg_image_ids[1], {0});
+    // 如果第二个图像不是已存在的需要固定的图像，则固定其一个平移分量
+    ba_config.SetConstantTvec(reg_image_ids[1], {0}); // 固定第二个图像的X方向平移
   }
 
-  // Run bundle adjustment.
+  // 创建并执行束调整
   BundleAdjuster bundle_adjuster(ba_options, ba_config);
+  // 设置优化阶段为全局优化(区别于局部优化)
   const BundleAdjuster::OptimazePhrase phrase = BundleAdjuster::OptimazePhrase::Global;
   bundle_adjuster.SetOptimazePhrase(phrase);
 
+  // 执行优化求解，如果失败则返回false
   if (!bundle_adjuster.Solve(reconstruction_)) {
     return false;
   }
 
-  // Normalize scene for numerical stability and
-  // to avoid large scale changes in viewer.
+  // 对场景进行归一化处理，以保持数值稳定性
+  // 同时避免在可视化时出现过大的尺度变化
+  // 归一化通常包括将场景中心移到坐标原点，并调整尺度使点云更加紧凑
   reconstruction_->Normalize();
 
   return true;
 }
 
+/**
+ * 基于激光雷达约束的全局束调整函数
+ * 
+ * 该函数结合激光雷达点云数据对整个重建场景进行全局优化，提高几何精度和尺度准确性。
+ * 与普通全局束调整不同，它允许使用激光雷达数据作为额外约束，并采用球形局部化策略。
+ * 
+ * @param options 增量式重建的全局选项
+ * @param ba_options 束调整的参数设置，包含激光雷达相关选项
+ * @return 优化是否成功
+ */
 bool IncrementalMapper::AdjustGlobalBundleByLidar(
     const Options& options, const BundleAdjustmentOptions& ba_options) {
+  // 检查重建对象是否已初始化
   CHECK_NOTNULL(reconstruction_);
 
+  // 获取所有已注册图像的ID列表和所有3D点
   const std::vector<image_t>& reg_image_ids = reconstruction_->RegImageIds();
+  // 获取所有3D点的ID和对应的3D点数据
   EIGEN_STL_UMAP(point3D_t, Point3D) point3d_ids = reconstruction_->Points3D();
 
+  // 确保至少有两个已注册图像，这是全局束调整的最低要求
   CHECK_GE(reg_image_ids.size(), 2) << "At least two images must be "
                                        "registered for global "
                                        "bundle-adjustment";
 
-  // Avoid degeneracies in bundle adjustment.
+  // 过滤具有负深度的观测点，避免束调整中出现退化情况
   reconstruction_->FilterObservationsWithNegativeDepth();
 
-  // Configure bundle adjustment.
+  // 创建束调整配置
   BundleAdjustmentConfig ba_config;
+  // 将所有已注册图像添加到优化配置中
   for (const image_t image_id : reg_image_ids) {
     ba_config.AddImage(image_id);
   }
 
-  // Fix the existing images, if option specified.
+  // 如果选项指定，固定已存在的图像位姿
   if (options.fix_existing_images) {
     for (const image_t image_id : reg_image_ids) {
       if (existing_image_ids_.count(image_id)) {
@@ -1035,19 +1168,24 @@ bool IncrementalMapper::AdjustGlobalBundleByLidar(
     }
   }
 
-  // Fix 7-DOFs of the bundle adjustment problem.
+  // 注释掉的代码是标准束调整中固定7自由度的方法
+  // 在激光雷达约束下不需要，因为激光雷达提供了尺度和坐标系
   // ba_config.SetConstantPose(reg_image_ids[0]);
   // if (!options.fix_existing_images ||
   //     !existing_image_ids_.count(reg_image_ids[1])) {
   //   ba_config.SetConstantTvec(reg_image_ids[1], {0});
   // }
+
+  // 如果已注册图像数量少于阈值，固定初始图像位姿
+  // 这有助于在早期阶段保持坐标系稳定
   int num = reg_image_ids.size() - 1 ;
   if (num < options.first_image_fixed_frames){
     ba_config.SetConstantPose(options.init_image_id1);
     num +=1;
   }
     
-  // Variables inside the sphere that need to be optimized
+  // 实现球形局部化策略：只优化最新图像周围特定半径内的图像和点
+  // 获取最新注册图像的位置
   image_t latest_image_id = reg_image_ids.back();
   Eigen::Quaterniond latest_q_cw(reconstruction_->Image(latest_image_id).Qvec()[0],
                             reconstruction_->Image(latest_image_id).Qvec()[1],
@@ -1055,12 +1193,17 @@ bool IncrementalMapper::AdjustGlobalBundleByLidar(
                             reconstruction_->Image(latest_image_id).Qvec()[3]);
   Eigen::Matrix3d latest_rot_cw = latest_q_cw.toRotationMatrix();
   Eigen::Vector3d latest_t_cw = reconstruction_->Image(latest_image_id).Tvec();
+  // 计算最新图像的世界坐标(相机中心位置)
   Eigen::Vector3d latest_image_T = - latest_rot_cw.transpose() * latest_t_cw;
-  std::vector<image_t> image_in_sphere;
-  std::vector<image_t> image_out_sphere;
-  std::unordered_set<point3D_t> variable_point3D_ids;
 
+  // 用于存储球内和球外的图像
+  std::vector<image_t> image_in_sphere; // 球内图像，会被优化
+  std::vector<image_t> image_out_sphere; // 球外图像，位姿将被固定
+  std::unordered_set<point3D_t> variable_point3D_ids; // 需要优化的3D点ID集合
+
+  // 遍历所有已注册图像，根据与最新图像的距离判断是否在球内
   for (const image_t& image_id : reg_image_ids){
+    // 计算当前图像的世界坐标
     Eigen::Quaterniond q_cw(reconstruction_->Image(image_id).Qvec()[0],
                             reconstruction_->Image(image_id).Qvec()[1],
                             reconstruction_->Image(image_id).Qvec()[2],
@@ -1068,7 +1211,10 @@ bool IncrementalMapper::AdjustGlobalBundleByLidar(
     Eigen::Matrix3d rot_cw = q_cw.toRotationMatrix();
     Eigen::Vector3d t_cw = reconstruction_->Image(image_id).Tvec();
     Eigen::Vector3d image_T = - rot_cw.transpose() * t_cw;
+
+    // 计算与最新图像的距离
     double dist = (latest_image_T - image_T).norm();
+    // 根据距离将图像分为球内和球外
     if (dist <= options.ba_spherical_search_radius) {
       image_in_sphere.push_back(image_id);
     } else {
@@ -1076,118 +1222,169 @@ bool IncrementalMapper::AdjustGlobalBundleByLidar(
     }
   }
 
+  // 固定球外图像的位姿，这些图像不参与优化
   for (const image_t image_id : image_out_sphere) {
     ba_config.SetConstantPose(image_id);
   }
 
+  // 收集球内图像观测到的所有3D点，这些点需要被优化
   for (image_t image_id : image_in_sphere) {
     std::vector<class Point2D> point2Ds = reconstruction_->Image(image_id).Points2D();
     for (Point2D& point2D : point2Ds) {
+      // 跳过没有对应3D点的2D特征点
       if (!point2D.HasPoint3D()) {
             continue;
       }
+      // 获取对应的3D点ID
       point3D_t point3d_id = point2D.GetPoint3DId();
+      // 确认该3D点存在于重建中
       auto iter = point3d_ids.find(point3d_id);
       if (iter != point3d_ids.end()){
+        // 将该点添加为可变点(需要优化)
         ba_config.AddVariablePoint(point3d_id);
         variable_point3D_ids.insert(point3d_id);
       }
     }
   }
 
+  // 如果启用激光雷达约束
   if (ba_options.if_add_lidar_constraint || ba_options.if_add_lidar_corresponding){
+    // 为每个需要优化的3D点查找对应的激光雷达点
     for (auto iter = variable_point3D_ids.begin(); iter != variable_point3D_ids.end(); iter++){
       point3D_t point3D_id = *iter;
       Point3D& point3D = reconstruction_->Point3D(point3D_id);
+      // 标记该点在优化球内
       point3D.IfInSphere() = true;
       // int track_length = point3D.Track().Length();
       // double max_search_range = options.kdtree_max_search_range - (track_length - 3) * options.search_range_drop_speed;
+
+      // 根据点被优化的次数动态调整搜索范围
+      // 优化次数越多，搜索范围越小，表示对该点位置越有信心
       int opt_num = point3D.GlobalOptNum();
       double max_search_range = options.kdtree_max_search_range - opt_num * options.search_range_drop_speed;
       if (max_search_range <= options.kdtree_min_search_range) {
         max_search_range = options.kdtree_min_search_range;
       }
+
+      // 获取3D点坐标并在激光雷达点云中搜索最近点
       Eigen::Vector3d pt_xyz = point3D.XYZ();
-      Eigen::Vector6d lidar_pt;
+      Eigen::Vector6d lidar_pt; // 包含位置和法向量的激光雷达点
       if (lidar_pointcloud_process_->SearchNearestNeiborByKdtree(pt_xyz,lidar_pt)) {
-        Eigen::Vector3d norm = lidar_pt.block(3,0,3,1);
-        Eigen::Vector3d l_pt = lidar_pt.block(0,0,3,1);
+        // 提取法向量和点坐标
+        Eigen::Vector3d norm = lidar_pt.block(3,0,3,1); // 法向量
+        Eigen::Vector3d l_pt = lidar_pt.block(0,0,3,1); // 点坐标
+
+        // 计算平面方程 ax+by+cz+d=0 中的d参数
         double d = 0 - l_pt.dot(norm);
         Eigen::Vector4d plane;
         plane << norm(0),norm(1),norm(2),d;
 
+        // 创建激光雷达点对象
         LidarPoint lidar_point(l_pt,plane);
+
+        // 根据法向量判断点的类型(地面点或普通点)
+        // 如果y方向法向量远大于x和z方向，认为是地面点
         if (std::abs(norm(1)/norm(0))>10 && std::abs(norm(1)/norm(2))>10) {
-          lidar_point.SetType(LidarPointType::IcpGround);
+          lidar_point.SetType(LidarPointType::IcpGround); // 设置为地面点
+          // 设置地面点颜色为黄色
           Eigen::Vector3ub color;
           color << 255,255,0;
           lidar_point.SetColor(color);
         } else {
-          lidar_point.SetType(LidarPointType::Icp);
+          lidar_point.SetType(LidarPointType::Icp); // 设置为普通点
+          // 设置普通点颜色为蓝色
           Eigen::Vector3ub color;
           color << 0,0,255;
           lidar_point.SetColor(color);
         }
+
+        // 计算点到点距离，如果超出搜索范围则跳过
         double dist = lidar_point.ComputePointToPointDist(pt_xyz);
         if (dist > max_search_range) continue;
+
+        // 将激光雷达点添加到束调整配置和重建中
         ba_config.AddLidarPoint(point3D_id,lidar_point);
         reconstruction_ -> AddLidarPointInGlobal(point3D_id,lidar_point);
       }
     }
   }
   
-  // Run bundle adjustment.
+  // 创建并执行束调整
   BundleAdjuster bundle_adjuster(ba_options, ba_config);
   const BundleAdjuster::OptimazePhrase phrase = BundleAdjuster::OptimazePhrase::Global;
   bundle_adjuster.SetOptimazePhrase(phrase);
 
+  // 执行优化求解，如果失败则返回false
   if (!bundle_adjuster.Solve(reconstruction_)) {
     return false;
   }
 
+  // 更新所有优化过的3D点
   for (auto iter = variable_point3D_ids.begin(); iter != variable_point3D_ids.end(); iter++) {
     Point3D& Point3D = reconstruction_ -> Point3D(*iter);
-    Point3D.AddGlobalOptNum();
-    Point3D.IfInSphere() = false;
+    Point3D.AddGlobalOptNum(); // 增加全局优化计数
+    Point3D.IfInSphere() = false; // 重置球内标记
   }
 
-  // Normalize scene for numerical stability and
-  // to avoid large scale changes in viewer.
+  // 注释掉的归一化步骤，在激光雷达约束下通常不需要归一化，因为已有真实尺度
   // reconstruction_->Normalize();
 
   return true;
 }
 
+/**
+ * 并行全局束调整函数 - 使用并行计算加速整个场景的优化
+ * 
+ * 该函数提供了一个并行计算版本的全局束调整，适用于大规模重建场景，
+ * 能够利用多核处理器加速计算过程，提高大场景优化效率。
+ * 
+ * @param ba_options 常规束调整的参数设置
+ * @param parallel_ba_options 并行束调整的特有参数设置
+ * @return 优化是否成功
+ */
 bool IncrementalMapper::AdjustParallelGlobalBundle(
     const BundleAdjustmentOptions& ba_options,
     const ParallelBundleAdjuster::Options& parallel_ba_options) {
+  // 确保重建对象已初始化
   CHECK_NOTNULL(reconstruction_);
 
+  // 获取所有已注册图像的ID列表
   const std::vector<image_t>& reg_image_ids = reconstruction_->RegImageIds();
 
+  // 确保至少有两个已注册图像，这是全局束调整的最低要求
   CHECK_GE(reg_image_ids.size(), 2)
       << "At least two images must be registered for global bundle-adjustment";
 
-  // Avoid degeneracies in bundle adjustment.
+  // 过滤具有负深度的观测点，避免束调整中出现退化情况
+  // 负深度表示点位于相机后方，这在物理上是不可能的
   reconstruction_->FilterObservationsWithNegativeDepth();
 
-  // Configure bundle adjustment.
+  // 创建并配置束调整参数
   BundleAdjustmentConfig ba_config;
+  // 将所有已注册图像添加到优化配置中
   for (const image_t image_id : reg_image_ids) {
     ba_config.AddImage(image_id);
   }
 
-  // Run bundle adjustment.
+  // 注意：与普通全局束调整不同，这里没有显式固定7个自由度
+  // 并行束调整器可能内部处理了这个问题，或者使用了其他约束方法
+
+  // 创建并执行并行束调整
+  // 使用专门的ParallelBundleAdjuster类，它能够利用多线程加速优化过程
   ParallelBundleAdjuster bundle_adjuster(parallel_ba_options, ba_options,
                                          ba_config);
+
+  // 执行优化求解，如果失败则返回false
   if (!bundle_adjuster.Solve(reconstruction_)) {
     return false;
   }
 
-  // Normalize scene for numerical stability and
-  // to avoid large scale changes in viewer.
+  // 对场景进行归一化处理，以保持数值稳定性
+  // 同时避免在可视化时出现过大的尺度变化
+  // 归一化通常包括将场景中心移到坐标原点，并调整尺度使点云更加紧凑
   reconstruction_->Normalize();
 
+  // 优化成功，返回true
   return true;
 }
 

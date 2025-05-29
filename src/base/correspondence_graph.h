@@ -178,14 +178,34 @@ point2D_t CorrespondenceGraph::NumCorrespondencesForImage(
   return images_.at(image_id).num_correspondences;
 }
 
+/**
+ * 获取两张图像之间的对应点数量
+ * 
+ * 该函数查询并返回指定的两张图像之间匹配的特征点数量。
+ * 这个数值反映了两张图像之间的重叠程度和匹配质量，
+ * 常用于决定图像对的连接强度和选择最佳的图像对进行处理。
+ * 
+ * @param image_id1 第一张图像的ID
+ * @param image_id2 第二张图像的ID
+ * @return 两张图像之间的对应点数量，如果没有对应关系则返回0
+ */
 point2D_t CorrespondenceGraph::NumCorrespondencesBetweenImages(
     const image_t image_id1, const image_t image_id2) const {
+
+  // 根据两个图像ID计算唯一的图像对ID
+  // 图像对ID是一个64位整数，由两个32位图像ID组合而成
   const image_pair_t pair_id =
       Database::ImagePairToPairId(image_id1, image_id2);
+
+  // 在图像对映射表中查找该图像对
   const auto it = image_pairs_.find(pair_id);
+
+  // 如果找不到该图像对（即两张图像之间没有记录任何对应关系）
   if (it == image_pairs_.end()) {
-    return 0;
+    return 0; // 返回0，表示没有对应点
   } else {
+    // 否则返回该图像对记录的对应点数量
+    // 转换为point2D_t类型（通常是无符号整数）
     return static_cast<point2D_t>(it->second.num_correspondences);
   }
 }
