@@ -436,15 +436,32 @@ std::vector<Image> Database::ReadAllImages() const {
   return images;
 }
 
+/**
+ * [功能描述]：从数据库中读取特定图像的特征关键点信息
+ * 特征关键点是计算机视觉中的关键概念，表示图像中具有独特性质的点，如角点或斑点
+ * @param [image_id]：要读取关键点的图像ID
+ * @return [FeatureKeypoints]：返回特征关键点的集合
+ */
 FeatureKeypoints Database::ReadKeypoints(const image_t image_id) const {
+  // 将图像ID绑定到预编译的SQL语句中
+  // 这里使用了SQLite的参数绑定机制，防止SQL注入并提高性能
   SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_read_keypoints_, 1, image_id));
 
+  // 执行SQL查询，获取特征关键点数据
+  // sqlite3_step返回SQLITE_ROW表示成功查询到一行数据
   const int rc = SQLITE3_CALL(sqlite3_step(sql_stmt_read_keypoints_));
+
+  // 从查询结果中读取BLOB（二进制大对象）数据并转换为矩阵格式
+  // 特征关键点通常以压缩的二进制格式存储在数据库中，以节省空间
   const FeatureKeypointsBlob blob = ReadDynamicMatrixBlob<FeatureKeypointsBlob>(
       sql_stmt_read_keypoints_, rc, 0);
 
+  // 重置SQL语句，准备下一次查询
+  // 这是SQLite的最佳实践，确保语句可以被重用
   SQLITE3_CALL(sqlite3_reset(sql_stmt_read_keypoints_));
 
+  // 将二进制Blob数据转换为特征关键点结构
+  // 解码压缩的二进制数据，恢复为原始的关键点格式
   return FeatureKeypointsFromBlob(blob);
 }
 

@@ -109,55 +109,68 @@ void CorrespondenceGraph::AddImage(const image_t image_id,
   images_[image_id].corrs.resize(num_points);
 }
 
+/**
+ * [功能描述]：向对应关系图中添加两张图像间的特征点匹配
+ * 对应关系图是一种数据结构，记录了不同图像间特征点的对应关系，是SfM系统的核心数据结构之一
+ * @param [image_id1]：第一张图像的ID
+ * @param [image_id2]：第二张图像的ID
+ * @param [matches]：两张图像间的特征点匹配集合
+ */
 void CorrespondenceGraph::AddCorrespondences(const image_t image_id1,
                                              const image_t image_id2,
                                              const FeatureMatches& matches) {
-  // Avoid self-matches - should only happen, if user provides custom matches.
+  // 避免自匹配 - 通常只在用户提供自定义匹配时可能发生
   if (image_id1 == image_id2) {
     std::cout << "WARNING: Cannot use self-matches for image_id=" << image_id1
               << std::endl;
-    return;
+    return; // 不处理自匹配情况，直接返回
   }
 
-  // Corresponding images.
+  // 获取对应图像的数据结构
   struct Image& image1 = images_.at(image_id1);
   struct Image& image2 = images_.at(image_id2);
 
-  // Store number of correspondences for each image to find good initial pair.
+  // 更新每张图像的对应点总数，这有助于后续选择好的初始图像对
   image1.num_correspondences += matches.size();
   image2.num_correspondences += matches.size();
 
-  // Set the number of all correspondences for this image pair. Further below,
-  // we will make sure that only unique correspondences are counted.
+  // 计算这对图像的唯一标识符，并获取或创建对应的图像对记录
+  // 初步设置对应点数量为所有匹配数，后续会过滤重复的对应关系
   const image_pair_t pair_id =
       Database::ImagePairToPairId(image_id1, image_id2);
   auto& image_pair = image_pairs_[pair_id];
   image_pair.num_correspondences += static_cast<point2D_t>(matches.size());
 
-  // Store all matches in correspondence graph data structure. This data-
-  // structure uses more memory than storing the raw match matrices, but is
-  // significantly more efficient when updating the correspondences in case an
-  // observation is triangulated.
+  // 将所有匹配存储到对应关系图数据结构中
+  // 此数据结构比直接存储原始匹配矩阵使用更多内存，
+  // 但在三角测量过程中更新对应关系时效率显著更高
 
+  // 遍历所有特征点匹配
   for (const auto& match : matches) {
+    // 检查特征点索引是否有效（是否在图像特征点范围内）
     const bool valid_idx1 = match.point2D_idx1 < image1.corrs.size();
     const bool valid_idx2 = match.point2D_idx2 < image2.corrs.size();
 
     if (valid_idx1 && valid_idx2) {
+      // 获取两个特征点的对应关系列表
       auto& corrs1 = image1.corrs[match.point2D_idx1];
       auto& corrs2 = image2.corrs[match.point2D_idx2];
 
+      // 检查是否存在重复对应关系
+      // 在corrs1中查找是否已有指向image_id2的对应关系
       const bool duplicate1 =
           std::find_if(corrs1.begin(), corrs1.end(),
                        [image_id2](const Correspondence& corr) {
                          return corr.image_id == image_id2;
                        }) != corrs1.end();
+      // 在corrs2中查找是否已有指向image_id1的对应关系
       const bool duplicate2 =
           std::find_if(corrs2.begin(), corrs2.end(),
                        [image_id1](const Correspondence& corr) {
                          return corr.image_id == image_id1;
                        }) != corrs2.end();
 
+      // 如果存在重复对应关系，则减少计数并输出警告
       if (duplicate1 || duplicate2) {
         image1.num_correspondences -= 1;
         image2.num_correspondences -= 1;
@@ -170,13 +183,19 @@ void CorrespondenceGraph::AddCorrespondences(const image_t image_id1,
                          image_id2)
                   << std::endl;
       } else {
+        // 如果不存在重复，则添加双向对应关系
+        // 图像1的特征点 -> 图像2的特征点
         corrs1.emplace_back(image_id2, match.point2D_idx2);
+        // 图像2的特征点 -> 图像1的特征点
         corrs2.emplace_back(image_id1, match.point2D_idx1);
       }
     } else {
+      // 如果特征点索引无效，则减少计数并输出警告
       image1.num_correspondences -= 1;
       image2.num_correspondences -= 1;
       image_pair.num_correspondences -= 1;
+
+      // 输出具体的无效索引信息
       if (!valid_idx1) {
         std::cout
             << StringPrintf(

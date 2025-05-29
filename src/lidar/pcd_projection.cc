@@ -173,6 +173,17 @@ void PcdProj::SetNewImage(const Image& image,
             // 平面方程: ax + by + cz + d = 0
             // 联立求解得到点的3D坐标
 
+            // 相机模型定义了射线方向
+            // x = z * (u - cx) / fx
+            // y = z * (v - cy) / fy
+            // 这表示从相机中心出发，通过图像点(u,v)的射线方向
+
+            // 平面方程提供约束
+
+            // 图像-激光雷达融合的3D点：它是图像中特征点在3D空间中的实际位置，同时满足：
+            // 它投影到图像平面上的位置就是我们观察到的特征点(u,v)
+            // 它位于激光雷达检测到的平面上
+
             // 获取激光雷达点的法向量和位置
             double a = static_cast<double>(iter->second.first.normal_x);
             double b = static_cast<double>(iter->second.first.normal_y);
