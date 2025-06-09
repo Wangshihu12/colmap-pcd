@@ -556,43 +556,82 @@ TwoViewGeometry Database::ReadTwoViewGeometry(const image_t image_id1,
   return two_view_geometry;
 }
 
+/**
+ * [功能描述]：从数据库中读取所有两视图几何关系数据
+ * 两视图几何是SfM系统的基础，包含了图像对之间的匹配特征及相对位姿信息
+ * 
+ * @param [image_pair_ids]：输出参数，存储所有图像对的ID
+ * @param [two_view_geometries]：输出参数，存储所有图像对的几何关系数据
+ */
 void Database::ReadTwoViewGeometries(
     std::vector<image_pair_t>* image_pair_ids,
     std::vector<TwoViewGeometry>* two_view_geometries) const {
   int rc;
+
+  // 遍历执行预编译的SQL查询语句，每次循环读取一行结果
+  // sql_stmt_read_two_view_geometries_是在Database构造函数中初始化的预编译SQL语句
   while ((rc = SQLITE3_CALL(sqlite3_step(
               sql_stmt_read_two_view_geometries_))) == SQLITE_ROW) {
+
+    // 读取图像对的唯一标识符(pair_id)
+    // pair_id是两个图像ID的组合，通过特定算法生成
     const image_pair_t pair_id = static_cast<image_pair_t>(
         sqlite3_column_int64(sql_stmt_read_two_view_geometries_, 0));
     image_pair_ids->push_back(pair_id);
     
+    // 创建新的两视图几何对象，用于存储当前图像对的几何关系
     TwoViewGeometry two_view_geometry;
 
+    // 读取内点匹配数据(inlier_matches)
+    // 这些是通过RANSAC等方法筛选出的高质量特征匹配
     const FeatureMatchesBlob blob = ReadDynamicMatrixBlob<FeatureMatchesBlob>(
         sql_stmt_read_two_view_geometries_, rc, 1);
     two_view_geometry.inlier_matches = FeatureMatchesFromBlob(blob);
 
+    // 读取几何配置类型(config)
+    // 可能的值包括：UNDEFINED, DEGENERATE, CALIBRATED, UNCALIBRATED, PLANAR, PANORAMIC, WATERMARK等
+    // 表示这对图像之间的几何关系类型
     two_view_geometry.config = static_cast<int>(
         sqlite3_column_int64(sql_stmt_read_two_view_geometries_, 4));
 
+    // 读取基础矩阵F(Fundamental Matrix)
+    // F是一个3x3矩阵，满足对应点的对极约束：x2^T·F·x1 = 0
     two_view_geometry.F = ReadStaticMatrixBlob<Eigen::Matrix3d>(
         sql_stmt_read_two_view_geometries_, rc, 5);
+
+    // 读取本质矩阵E(Essential Matrix)
+    // E是已标定相机的基础矩阵，满足：E = K2^T·F·K1，其中K为相机内参矩阵
     two_view_geometry.E = ReadStaticMatrixBlob<Eigen::Matrix3d>(
         sql_stmt_read_two_view_geometries_, rc, 6);
+
+    // 读取单应矩阵H(Homography Matrix)
+    // H是一个3x3矩阵，定义了两幅图像之间的投影变换，常用于平面场景
     two_view_geometry.H = ReadStaticMatrixBlob<Eigen::Matrix3d>(
         sql_stmt_read_two_view_geometries_, rc, 7);
+
+    // 读取相对旋转四元数(quaternion vector)
+    // 表示从第一个相机到第二个相机的旋转
     two_view_geometry.qvec = ReadStaticMatrixBlob<Eigen::Vector4d>(
         sql_stmt_read_two_view_geometries_, rc, 8);
+        
+    // 读取相对平移向量(translation vector)
+    // 表示从第一个相机到第二个相机的平移
     two_view_geometry.tvec = ReadStaticMatrixBlob<Eigen::Vector3d>(
         sql_stmt_read_two_view_geometries_, rc, 9);
 
+    // 对基础矩阵、本质矩阵和单应矩阵进行转置
+    // 这是因为SQLite存储的是列主序矩阵，而Eigen默认使用行主序
+    // 或者是因为算法需要使用这些矩阵的转置形式
     two_view_geometry.F.transposeInPlace();
     two_view_geometry.E.transposeInPlace();
     two_view_geometry.H.transposeInPlace();
 
+    // 将处理好的两视图几何添加到结果向量中
     two_view_geometries->push_back(two_view_geometry);
   }
 
+  // 重置SQL语句，使其可以再次执行
+  // 这是SQLite API的最佳实践
   SQLITE3_CALL(sqlite3_reset(sql_stmt_read_two_view_geometries_));
 }
 

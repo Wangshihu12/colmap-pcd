@@ -492,32 +492,78 @@ void IncrementalMapperController::Run() {
   GetTimer().PrintMinutes();
 }
 
+/**
+ * 加载SfM数据库到内存缓存
+ * 
+ * 该方法负责从SQLite数据库文件中加载所有必要的SfM数据（图像、特征点、匹配等）
+ * 到内存缓存中，以提高后续重建过程的访问速度
+ * 
+ * @return 数据库加载是否成功
+ */
 bool IncrementalMapperController::LoadDatabase() {
 
-  // Make sure images of the given reconstruction are also included when
-  // manually specifying images for the reconstrunstruction procedure.
+  //////////////////////////////////////////////////////////////////////////////
+  // 处理图像名称过滤集合
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 创建图像名称集合的副本，用于确定哪些图像需要被加载
+  // 这个集合可能包含用户手动指定的图像名称
   std::unordered_set<std::string> image_names = options_->image_names;
+
+  // 处理特殊情况：当存在一个重建并且用户手动指定了图像时
+  // 需要确保已存在重建中的图像也被包含在加载范围内
   if (reconstruction_manager_->Size() == 1 && !options_->image_names.empty()) {
+    // 获取已存在的重建对象引用
     const Reconstruction& reconstruction = reconstruction_manager_->Get(0);
+
+    // 遍历该重建中所有已注册的图像
     for (const image_t image_id : reconstruction.RegImageIds()) {
+      // 获取图像对象并提取图像名称
       const auto& image = reconstruction.Image(image_id);
+
+      // 将已注册图像的名称添加到图像名称集合中
+      // 这确保了即使用户手动指定图像列表，已存在重建中的图像也不会被忽略
+      // 这对于增量重建的连续性很重要
       image_names.insert(image.Name());
     }
   }
+
+  //////////////////////////////////////////////////////////////////////////////
+  // 初始化数据库连接和计时器
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 创建数据库连接对象，连接到指定路径的SQLite数据库文件
   Database database(database_path_);
+
+  // 启动计时器，用于测量数据库加载的耗时
   Timer timer;
   timer.Start();
 
+  //////////////////////////////////////////////////////////////////////////////
+  // 加载数据库内容到内存缓存
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 设置最小匹配数量阈值
+  // 只有匹配数量达到此阈值的图像对才会被加载，用于过滤低质量的匹配
   const size_t min_num_matches = static_cast<size_t>(options_->min_num_matches);
-  // database_cache_: A class that caches the contents of the database in memory, 
-  // used to quickly create new reconstruction instances when multiple models are reconstructed.
-  database_cache_.Load(database, min_num_matches, options_->ignore_watermarks,
-                       image_names);
+  
+  // 核心加载操作：将数据库内容加载到内存缓存
+  // database_cache_: 数据库缓存对象，将数据库内容缓存在内存中，
+  // 用于在重建多个模型时快速创建新的重建实例
+  database_cache_.Load(database,                     // 数据库连接对象
+                       min_num_matches,              // 最小匹配数量阈值
+                       options_->ignore_watermarks,  // 是否忽略水印检测
+                       image_names);                 // 要加载的图像名称集合
   std::cout << std::endl;
   timer.PrintMinutes();
 
   std::cout << std::endl;
 
+  //////////////////////////////////////////////////////////////////////////////
+  // 验证加载结果
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 检查是否成功加载了图像数据
   if (database_cache_.NumImages() == 0) {
     std::cout << "WARNING: No images with matches found in the database."
               << std::endl

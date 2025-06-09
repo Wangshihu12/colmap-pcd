@@ -214,56 +214,84 @@ void CorrespondenceGraph::AddCorrespondences(const image_t image_id1,
   }
 }
 
+/**
+ * [功能描述]：查找给定特征点的传递性对应关系
+ * 传递性对应关系是指通过多级间接连接找到的所有相关特征点
+ * 例如：A对应B，B对应C，则C是A的二级传递对应点
+ * 
+ * @param [image_id]：目标图像ID
+ * @param [point2D_idx]：目标特征点索引
+ * @param [transitivity]：要查找的传递级别深度（如2表示朋友的朋友，3表示朋友的朋友的朋友）
+ * @param [found_corrs]：输出参数，存储找到的所有对应关系
+ */
 void CorrespondenceGraph::FindTransitiveCorrespondences(
     const image_t image_id, const point2D_t point2D_idx,
     const size_t transitivity, std::vector<Correspondence>* found_corrs) const {
+
+  // 如果只需要直接对应关系(transitivity=1)，应该使用更高效的FindCorrespondences()函数
   CHECK_NE(transitivity, 1) << "Use more efficient FindCorrespondences()";
 
+  // 清空结果容器
   found_corrs->clear();
 
+  // 检查给定特征点是否有任何对应关系，如果没有则直接返回
   if (!HasCorrespondences(image_id, point2D_idx)) {
     return;
   }
 
+  // 将起始点添加到结果列表，作为BFS的起点
   found_corrs->emplace_back(image_id, point2D_idx);
 
+  // 使用哈希表跟踪已访问的特征点，避免重复处理
+  // 外层map的键是图像ID，值是该图像中已访问特征点的集合
   std::unordered_map<image_t, std::unordered_set<point2D_t>> image_corrs;
   image_corrs[image_id].insert(point2D_idx);
 
-  size_t corr_queue_begin = 0;
-  size_t corr_queue_end = 1;
+  // BFS队列的起始和结束指针
+  // 使用指针而非实际队列，避免数据复制，提高效率
+  size_t corr_queue_begin = 0; // 当前层级起始位置
+  size_t corr_queue_end = 1; // 当前层级结束位置
 
+  // 开始广度优先搜索，最多搜索transitivity层
   for (size_t t = 0; t < transitivity; ++t) {
-    // Collect correspondences at transitive level t to all
-    // correspondences that were collected at transitive level t - 1.
+    // 处理当前层级的所有节点（从corr_queue_begin到corr_queue_end-1）
     for (size_t i = corr_queue_begin; i < corr_queue_end; ++i) {
+      // 获取当前处理的对应关系
       const Correspondence ref_corr = (*found_corrs)[i];
 
+      // 获取该特征点所在图像的信息
       const Image& image = images_.at(ref_corr.image_id);
+      // 获取该特征点的所有直接对应关系
       const std::vector<Correspondence>& ref_corrs =
           image.corrs[ref_corr.point2D_idx];
 
+      // 遍历该特征点的所有直接对应点
       for (const Correspondence& corr : ref_corrs) {
-        // Check if correspondence already collected, otherwise collect.
+        // 检查这个对应点是否已被访问，如果没有则添加到结果中
+        // corr_image_corrs是图像corr.image_id中已访问点的集合
         auto& corr_image_corrs = image_corrs[corr.image_id];
+
+        // insert()返回pair<iterator,bool>，其中bool表示插入是否成功
+        // 只有当特征点之前未被访问时才为true
         if (corr_image_corrs.insert(corr.point2D_idx).second) {
+          // 将新发现的对应点添加到结果列表末尾
           found_corrs->emplace_back(corr.image_id, corr.point2D_idx);
         }
       }
     }
 
-    // Move on to the next block of correspondences at next transitive level.
-    corr_queue_begin = corr_queue_end;
-    corr_queue_end = found_corrs->size();
+    // 更新队列指针，准备处理下一层级的节点
+    corr_queue_begin = corr_queue_end; // 新层级的起始位置
+    corr_queue_end = found_corrs->size(); // 新层级的结束位置
 
-    // No new correspondences collected in last transitivity level.
+    // 如果这一层没有发现新的对应关系，提前结束搜索
     if (corr_queue_begin == corr_queue_end) {
       break;
     }
   }
 
-  // Remove first element, which is the given observation by swapping it
-  // with the last collected correspondence.
+  // 移除结果中的第一个元素（即输入的起始点）
+  // 通过将其与最后一个元素交换后弹出，避免整个数组移动
   if (found_corrs->size() > 1) {
     found_corrs->front() = found_corrs->back();
   }

@@ -58,61 +58,175 @@ std::unordered_set<point3D_t> Reconstruction::Point3DIds() const {
   return point3D_ids;
 }
 
+/**
+ * 从数据库缓存加载重建数据
+ * 
+ * 该方法负责从预处理的数据库缓存中加载所有必要的重建数据，
+ * 包括相机参数、图像信息、特征点数据和图像间的对应关系统计
+ * 
+ * @param database_cache 数据库缓存对象，包含所有预处理的SfM数据
+ */
 void Reconstruction::Load(const DatabaseCache& database_cache) {
+  // 初始化对应关系图指针为空
+  // 对应关系图将在后续的SetUp方法中被正确设置
+  // 这里先清空是为了确保状态的一致性
   correspondence_graph_ = nullptr;
 
-  // Add cameras.
+  //////////////////////////////////////////////////////////////////////////////
+  // 加载相机参数数据
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 预分配相机容器的内存空间，提高性能
+  // 避免在添加相机时频繁的内存重分配
   cameras_.reserve(database_cache.NumCameras());
+
+  // 遍历数据库缓存中的所有相机
   for (const auto& camera : database_cache.Cameras()) {
+    // 检查当前重建中是否已存在该相机
+    // camera.first 是相机ID，camera.second 是相机对象
     if (!ExistsCamera(camera.first)) {
+      // 如果相机不存在，则添加到重建中
+      // 这包含相机的内参矩阵、畸变参数等信息
       AddCamera(camera.second);
     }
-    // Else: camera was added before, e.g. with `ReadAllCameras`.
+    // 如果相机已存在，跳过添加
+    // 这种情况通常发生在增量重建或重建合并时
+    // 注释说明：相机可能之前通过ReadAllCameras等方法已经添加过
   }
 
-  // Add images.
+  //////////////////////////////////////////////////////////////////////////////
+  // 加载图像数据
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 预分配图像容器的内存空间
   images_.reserve(database_cache.NumImages());
 
+  // 遍历数据库缓存中的所有图像
   for (const auto& image : database_cache.Images()) {
+    // 检查当前重建中是否已存在该图像
+    // image.second 是图像对象，包含图像ID、名称、特征点等信息
     if (ExistsImage(image.second.ImageId())) {
+      // ===== 处理已存在图像的情况 =====
+      
+      // 获取已存在图像的引用，准备更新其数据
       class Image& existing_image = Image(image.second.ImageId());
+
+      // 验证图像名称一致性
+      // 确保相同ID的图像确实是同一张图像
       CHECK_EQ(existing_image.Name(), image.second.Name());
+
+      // 处理2D特征点数据
       if (existing_image.NumPoints2D() == 0) {
+        // 如果已存在图像没有2D特征点，则设置特征点数据
+        // 这通常发生在图像元数据已加载但特征点数据未加载的情况
         existing_image.SetPoints2D(image.second.Points2D());
       } else {
+        // 如果已存在图像已有2D特征点，验证数量一致性
+        // 确保数据的完整性和一致性
         CHECK_EQ(image.second.NumPoints2D(), existing_image.NumPoints2D());
       }
+
+      // 更新图像的观测统计信息
+      // 观测数量：该图像中能看到3D点的2D特征点数量
       existing_image.SetNumObservations(image.second.NumObservations());
+
+      // 更新图像的对应关系统计信息  
+      // 对应关系数量：该图像与其他图像间的特征点匹配数量
       existing_image.SetNumCorrespondences(image.second.NumCorrespondences());
     } else {
+      // ===== 处理新图像的情况 =====
+      
+      // 直接添加新图像到重建中
+      // 包括图像的所有元数据、特征点、统计信息等
       AddImage(image.second);
     }
   }
 
-  // Add image pairs.
+  //////////////////////////////////////////////////////////////////////////////
+  // 加载图像对的对应关系统计数据
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 遍历对应关系图中所有图像对的统计信息
+  // 这些统计信息用于后续的图像选择和质量评估
   for (const auto& image_pair :
        database_cache.CorrespondenceGraph().NumCorrespondencesBetweenImages()) {
+
+    // 创建图像对统计信息结构
     ImagePairStat image_pair_stat;
+
+    // 设置该图像对间的总对应关系数量
+    // image_pair.first 是图像对ID，image_pair.second 是对应关系数量
+    // 这个数量反映了两张图像间特征点匹配的丰富程度
     image_pair_stat.num_total_corrs = image_pair.second;
+
+    // 将统计信息添加到重建的图像对统计表中
+    // 这些统计信息在图像选择、初始化等阶段会被使用
     image_pair_stats_.emplace(image_pair.first, image_pair_stat);
   }
 }
 
+/**
+ * 设置重建对象的关键数据结构和状态
+ * 
+ * 该方法在数据加载完成后被调用，负责建立图像间的对应关系图连接，
+ * 初始化每个图像的相机关联，并处理已存在的三角化观测点状态
+ * 
+ * @param correspondence_graph 对应关系图指针，包含图像间特征点匹配信息
+ */
 void Reconstruction::SetUp(const CorrespondenceGraph* correspondence_graph) {
+  // 确保对应关系图指针不为空
+  // 对应关系图是SfM重建的核心数据结构，记录了所有图像间的特征点匹配关系
   CHECK_NOTNULL(correspondence_graph);
+
+  //////////////////////////////////////////////////////////////////////////////
+  // 为每个图像设置相机关联信息
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 遍历重建中的所有图像
   for (auto& image : images_) {
+    // image.first 是图像ID，image.second 是图像对象
+    
+    // 为每个图像设置其对应的相机对象
+    // 通过图像的CameraId获取相机信息，建立图像与相机的关联
+    // 这一步将相机的内参数据与图像对象关联起来
+    // SetUp方法会初始化图像的投影矩阵等计算所需的数据结构
     image.second.SetUp(Camera(image.second.CameraId()));
   }
+
+  //////////////////////////////////////////////////////////////////////////////
+  // 设置对应关系图连接
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 将对应关系图指针保存到重建对象中
+  // 这使得重建对象能够访问图像间的特征点匹配信息
+  // 在后续的三角化、图像注册等过程中会频繁使用这些对应关系
   correspondence_graph_ = correspondence_graph;
 
-  // If an existing model was loaded from disk and there were already images
-  // registered previously, we need to set observations as triangulated.
+  //////////////////////////////////////////////////////////////////////////////
+  // 处理已注册图像中的三角化观测点
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 以下代码处理从磁盘加载的已有模型的情况
+  // 如果重建模型是从文件加载的，并且之前已经有图像被注册过，
+  // 需要将这些已存在的观测点正确标记为已三角化状态
+  
+  // 遍历所有已注册的图像ID
   for (const auto image_id : reg_image_ids_) {
+    // 获取当前图像的引用
     const class Image& image = Image(image_id);
+
+    // 遍历该图像中的所有2D特征点
     for (point2D_t point2D_idx = 0; point2D_idx < image.NumPoints2D();
          ++point2D_idx) {
+
+      // 检查当前2D特征点是否已经关联了3D点
       if (image.Point2D(point2D_idx).HasPoint3D()) {
+        // 设置标志：这不是一个继续的3D点（即不是从其他重建延续的点）
         const bool kIsContinuedPoint3D = false;
+
+        // 将这个观测点标记为已三角化状态
+        // 这一步很重要，因为从磁盘加载的模型需要恢复其内部状态
+        // SetObservationAsTriangulated会更新相关的统计信息和索引结构
         SetObservationAsTriangulated(image_id, point2D_idx,
                                      kIsContinuedPoint3D);
       }

@@ -109,28 +109,72 @@ void IncrementalMapper::LoadExistedImagePoses(std::map<uint32_t, std::vector<dou
   if_import_pose_prior_ = true;
 }
 
+/**
+ * 开始重建过程 - 初始化增量式SfM重建器
+ * 
+ * 该方法是增量式重建的入口点，负责设置所有必要的数据结构和状态，
+ * 为后续的图像注册、三角化和束调整做准备
+ * 
+ * @param reconstruction 重建对象指针，用于存储和管理3D重建数据
+ */
 void IncrementalMapper::BeginReconstruction(Reconstruction* reconstruction) {
+  // 确保当前没有正在进行的重建过程
+  // 这是一个安全检查，防止重复初始化或状态混乱
   CHECK(reconstruction_ == nullptr);
+
+  // 设置重建对象指针，这是整个重建过程的核心数据结构
+  // 它将存储相机参数、图像位姿、3D点等所有重建信息
   reconstruction_ = reconstruction;
+
+  // 从数据库缓存中加载重建数据
+  // 包括相机内参、图像信息、特征点等基础数据
   reconstruction_->Load(*database_cache_);
+
+  // 设置对应关系图，建立图像间特征点的对应关系
+  // 这是增量式重建中查找图像间匹配关系的关键数据结构
   reconstruction_->SetUp(&database_cache_->CorrespondenceGraph());
+
+  // 创建增量式三角化器
+  // 负责在重建过程中逐步添加新的3D点，是增量式SfM的核心组件之一
   triangulator_ = std::make_unique<IncrementalTriangulator>(
       &database_cache_->CorrespondenceGraph(), reconstruction);
 
+  // 重置共享注册图像计数器
+  // 用于统计在多个重建中被注册的图像数量
   num_shared_reg_images_ = 0;
+
+  // 清空每个相机的已注册图像计数表
+  // 这个映射表记录每个相机模型对应的已注册图像数量
+  // 在束调整时用于决定是否固定相机参数
   num_reg_images_per_camera_.clear();
+
+  // 为已经注册的图像触发注册事件
+  // 如果重建对象中已有注册的图像，需要更新相关统计信息
   for (const image_t image_id : reconstruction_->RegImageIds()) {
     RegisterImageEvent(image_id);
   }
 
+  // 记录已存在的图像ID集合
+  // 这用于区分新注册的图像和预先存在的图像
+  // 在某些配置下，预先存在的图像位姿可能需要保持固定
   existing_image_ids_ =
       std::unordered_set<image_t>(reconstruction->RegImageIds().begin(),
                                   reconstruction->RegImageIds().end());
 
+  // 重置上一次初始化使用的图像对ID
+  // 用于避免重复计算相同图像对的两视图几何关系
   prev_init_image_pair_id_ = kInvalidImagePairId;
+
+  // 重置上一次计算的两视图几何关系
+  // 存储最近一次成功计算的图像对几何关系，用于优化计算效率
   prev_init_two_view_geometry_ = TwoViewGeometry();
 
+  // 清空已过滤图像列表
+  // 记录因质量问题被过滤掉的图像，避免重复尝试注册
   filtered_images_.clear();
+
+  // 清空图像注册尝试次数记录
+  // 记录每个图像尝试注册的次数，防止无限重试
   num_reg_trials_.clear();
 }
 
