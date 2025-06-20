@@ -286,59 +286,105 @@ bool IncrementalMapper::FindInitialImagePair(const Options& options,
   return false;
 }
 
+/**
+ * 查找下一批待注册的图像
+ * 
+ * 该函数是增量式SfM重建中的核心函数之一，负责从所有未注册的图像中
+ * 选择最适合下一步注册的图像序列。选择策略基于图像的可见3D点数量、
+ * 可见点比例或不确定性等指标，确保重建过程的稳定性和准确性。
+ * 
+ * @param options 重建选项，包含图像选择方法等参数
+ * @return 按优先级排序的待注册图像ID列表
+ */
 std::vector<image_t> IncrementalMapper::FindNextImages(const Options& options) {
+  // 确保重建对象已初始化
   CHECK_NOTNULL(reconstruction_);
+  // 检查选项参数是否合法
   CHECK(options.Check());
 
+  // 根据配置的图像选择方法，选择相应的图像排序函数
+  // 这些函数用于计算每个图像的优先级得分
   std::function<float(const Image&)> rank_image_func;
   switch (options.image_selection_method) {
     case Options::ImageSelectionMethod::MAX_VISIBLE_POINTS_NUM:
+      // 基于可见3D点数量：优先选择能观测到更多已重建3D点的图像
+      // 这类图像通常能提供更多的2D-3D对应关系，有利于准确的位姿估计
       rank_image_func = RankNextImageMaxVisiblePointsNum;
       break;
     case Options::ImageSelectionMethod::MAX_VISIBLE_POINTS_RATIO:
+      // 基于可见点比例：优先选择可见3D点占总特征点比例高的图像
+      // 这能确保选择的图像具有较高的3D信息密度
       rank_image_func = RankNextImageMaxVisiblePointsRatio;
       break;
     case Options::ImageSelectionMethod::MIN_UNCERTAINTY:
+      // 基于不确定性最小化：优先选择能最大程度降低重建不确定性的图像
+      // 通过点的可见性得分来衡量，有助于提高重建的整体精度
       rank_image_func = RankNextImageMinUncertainty;
       break;
   }
 
-  std::vector<std::pair<image_t, float>> image_ranks;
-  std::vector<std::pair<image_t, float>> other_image_ranks;
+  // 存储候选图像及其优先级得分的容器
+  std::vector<std::pair<image_t, float>> image_ranks;      // 首选图像：未被过滤且未尝试注册过的图像
+  std::vector<std::pair<image_t, float>> other_image_ranks; // 备选图像：已被过滤或注册失败过的图像
 
+  // 遍历重建中的所有图像，筛选候选图像
   // Append images that have not failed to register before.
   for (const auto& image : reconstruction_->Images()) {
+    // 跳过已经注册的图像
     // Skip images that are already registered.
     if (image.second.IsRegistered()) {
       continue;
     }
 
+    // 只考虑具有足够可见3D点数量的图像
+    // 可见3D点数量必须满足绝对位姿估计的最小内点要求
+    // 这确保了图像有足够的2D-3D对应关系进行可靠的位姿估计
     // Only consider images with a sufficient number of visible points.
     if (image.second.NumVisiblePoints3D() <
         static_cast<size_t>(options.abs_pose_min_num_inliers)) {
       continue;
     }
 
+    // 限制每个图像的最大注册尝试次数
+    // 避免在困难图像上浪费过多计算资源
     // Only try registration for a certain maximum number of times.
     const size_t num_reg_trials = num_reg_trials_[image.first];
     if (num_reg_trials >= static_cast<size_t>(options.max_reg_trials)) {
       continue;
     }
 
+    // 计算当前图像的优先级得分
     // If image has been filtered or failed to register, place it in the
     // second bucket and prefer images that have not been tried before.
     const float rank = rank_image_func(image.second);
+    
+    // 根据图像的历史状态将其分类到不同的优先级队列：
+    // 1. 首选队列：未被过滤且从未尝试注册过的"新鲜"图像
+    //    这类图像最有可能成功注册，优先考虑
+    // 2. 备选队列：已被过滤或注册失败过的图像
+    //    作为备选方案，在首选图像不足时考虑
     if (filtered_images_.count(image.first) == 0 && num_reg_trials == 0) {
+      // 图像未被过滤且未尝试过注册，加入首选队列
       image_ranks.emplace_back(image.first, rank);
     } else {
+      // 图像已被过滤或曾经注册失败，加入备选队列
       other_image_ranks.emplace_back(image.first, rank);
     }
   }
 
+  // 创建最终的排序结果容器
   std::vector<image_t> ranked_images_ids;
+  
+  // 按优先级得分对首选图像进行降序排序，并添加到结果列表
+  // 优先级高的图像会被优先尝试注册
   SortAndAppendNextImages(image_ranks, &ranked_images_ids);
+  
+  // 按优先级得分对备选图像进行降序排序，并追加到结果列表末尾
+  // 确保在首选图像用完后还有备选方案
   SortAndAppendNextImages(other_image_ranks, &ranked_images_ids);
 
+  // 返回按优先级排序的图像ID列表
+  // 列表前部是最优先尝试注册的图像，后部是备选图像
   return ranked_images_ids;
 }
 
@@ -646,77 +692,117 @@ bool IncrementalMapper::RegisterInitialImagePairByDepthProj(const Options& optio
   return true;
 }
 
+/**
+ * 注册下一个图像到重建中
+ * 
+ * 该函数是增量式SfM重建的核心函数，负责将新图像添加到已有的重建中。
+ * 通过PnP算法估计图像的绝对位姿，并更新相应的3D点轨迹。
+ * 这是增量式重建中最频繁调用的函数之一。
+ * 
+ * @param options 重建配置选项
+ * @param image_id 待注册图像的ID
+ * @return 注册是否成功
+ */
 bool IncrementalMapper::RegisterNextImage(const Options& options,
                                           const image_t image_id) {
+  // 确保重建对象已初始化
   CHECK_NOTNULL(reconstruction_);
+  // 确保至少已有2个图像注册（初始图像对），这是增量式重建的前提
   CHECK_GE(reconstruction_->NumRegImages(), 2);
 
+  // 检查选项参数是否合法
   CHECK(options.Check());
 
+  // 获取待注册图像和相机的引用
   Image& image = reconstruction_->Image(image_id);
   Camera& camera = reconstruction_->Camera(image.CameraId());
 
+  // 确保图像未被重复注册，每个图像只能注册一次
   CHECK(!image.IsRegistered()) << "Image cannot be registered multiple times";
 
+  // 增加该图像的注册尝试次数计数器
+  // 用于限制单个图像的最大尝试次数，避免无限重试
   num_reg_trials_[image_id] += 1;
 
+  // 检查是否有足够的2D-3D对应关系进行位姿估计
+  // 可见3D点数量必须满足绝对位姿估计的最小内点要求
   // Check if enough 2D-3D correspondences.
   if (image.NumVisiblePoints3D() <
       static_cast<size_t>(options.abs_pose_min_num_inliers)) {
     return false;
   }
 
-    if (if_import_pose_prior_) {
-      auto iter = existed_poses_.find(image_id);
-      if (iter != existed_poses_.end()){
-        std::vector<double> pose = iter -> second;
-        Eigen::Vector4d q_cw;
-        Eigen::Vector3d t_cw;
-        t_cw << pose[0], pose[1], pose[2];
-        q_cw << pose[3], pose[4], pose[5], pose[6];
-        image.SetQvec(q_cw);
-        image.SetTvec(t_cw);
-      }
-
+  // 如果启用了位姿先验导入功能，尝试使用预设的位姿
+  // 这通常用于GPS辅助的重建或已知部分图像位姿的情况
+  if (if_import_pose_prior_) {
+    auto iter = existed_poses_.find(image_id);
+    if (iter != existed_poses_.end()){
+      // 找到预设位姿，直接设置图像的旋转和平移
+      std::vector<double> pose = iter -> second;
+      Eigen::Vector4d q_cw;  // 四元数表示的旋转
+      Eigen::Vector3d t_cw;  // 平移向量
+      // 解析位姿数据：前3个元素是平移，后4个元素是四元数
+      t_cw << pose[0], pose[1], pose[2];
+      q_cw << pose[3], pose[4], pose[5], pose[6];
+      image.SetQvec(q_cw);
+      image.SetTvec(t_cw);
+    }
   }
 
   //////////////////////////////////////////////////////////////////////////////
+  // 搜索2D-3D对应关系
   // Search for 2D-3D correspondences
   //////////////////////////////////////////////////////////////////////////////
 
-  
+  // 获取对应关系图，用于查找图像间的特征点匹配
   const CorrespondenceGraph& correspondence_graph =
       database_cache_->CorrespondenceGraph();
 
-  std::vector<std::pair<point2D_t, point3D_t>> tri_corrs;
-  std::vector<Eigen::Vector2d> tri_points2D;
-  std::vector<Eigen::Vector3d> tri_points3D;
+  // 存储找到的2D-3D对应关系
+  std::vector<std::pair<point2D_t, point3D_t>> tri_corrs;  // 2D点索引到3D点ID的对应关系
+  std::vector<Eigen::Vector2d> tri_points2D;               // 2D点坐标列表
+  std::vector<Eigen::Vector3d> tri_points3D;               // 对应的3D点坐标列表
 
+  // 用于避免重复的3D点对应关系
   std::unordered_set<point3D_t> corr_point3D_ids;
+  
+  // 遍历当前图像的所有2D特征点
   for (point2D_t point2D_idx = 0; point2D_idx < image.NumPoints2D();
        ++point2D_idx) {
     const Point2D& point2D = image.Point2D(point2D_idx);
 
+    // 为每个2D点清空已找到的3D点集合
     corr_point3D_ids.clear();
+    
+    // 查找当前2D点在其他已注册图像中的对应点
     for (const auto& corr :
          correspondence_graph.FindCorrespondences(image_id, point2D_idx)) {
       const Image& corr_image = reconstruction_->Image(corr.image_id);
+      
+      // 只考虑已注册的图像，未注册图像无法提供3D信息
       // If this image hasn't been registered, ignore this image
       if (!corr_image.IsRegistered()) {
         continue;
       }
+      
+      // 获取对应图像中的2D点
       const Point2D& corr_point2D = corr_image.Point2D(corr.point2D_idx);
+      // 只考虑已有3D点的2D特征点
       if (!corr_point2D.HasPoint3D()) {
         continue;
       }
 
+      // 避免同一个3D点被重复添加（一个3D点可能在多个图像中被观测到）
       // Avoid duplicate correspondences.
       if (corr_point3D_ids.count(corr_point2D.Point3DId()) > 0) {
         continue;
       }
+      
+      // 检查对应图像的相机参数是否合理
       const Camera& corr_camera =
           reconstruction_->Camera(corr_image.CameraId());
 
+      // 跳过具有异常相机参数的图像，避免引入不可靠的3D点
       // Avoid correspondences to images with bogus camera parameters.
       if (corr_camera.HasBogusParams(options.min_focal_length_ratio,
                                      options.max_focal_length_ratio,
@@ -724,16 +810,20 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
         continue;
       }
 
+      // 获取3D点信息并建立2D-3D对应关系
       const Point3D& point3D =
           reconstruction_->Point3D(corr_point2D.Point3DId());
 
+      // 记录有效的2D-3D对应关系
       tri_corrs.emplace_back(point2D_idx, corr_point2D.Point3DId());
       corr_point3D_ids.insert(corr_point2D.Point3DId());
-      tri_points2D.push_back(point2D.XY());
-      tri_points3D.push_back(point3D.XYZ());
+      tri_points2D.push_back(point2D.XY());      // 2D点坐标
+      tri_points3D.push_back(point3D.XYZ());     // 对应的3D点坐标
     }
   }
 
+  // 检查找到的2D-3D对应关系数量是否足够进行可靠的位姿估计
+  // 对应关系数量可能因为相机参数异常而减少
   // The size of `next_image.num_tri_obs` and `tri_corrs_point2D_idxs.size()`
   // can only differ, when there are images with bogus camera parameters, and
   // hence we skip some of the 2D-3D correspondences.
@@ -743,34 +833,41 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
   }
 
   //////////////////////////////////////////////////////////////////////////////
+  // 2D-3D位姿估计配置
   // 2D-3D estimation
   //////////////////////////////////////////////////////////////////////////////
 
-  // Only refine / estimate focal length, if no focal length was specified
-  // (manually or through EXIF) and if it was not already estimated previously
-  // from another image (when multiple images share the same camera
-  // parameters)
-
+  // 配置绝对位姿估计的参数
+  // 这些参数控制PnP算法的行为和RANSAC的策略
   AbsolutePoseEstimationOptions abs_pose_options;
   abs_pose_options.num_threads = options.num_threads;
-  abs_pose_options.num_focal_length_samples = 30;
+  abs_pose_options.num_focal_length_samples = 30;  // 焦距采样数量（当需要估计焦距时）
   abs_pose_options.min_focal_length_ratio = options.min_focal_length_ratio;
   abs_pose_options.max_focal_length_ratio = options.max_focal_length_ratio;
   abs_pose_options.ransac_options.max_error = options.abs_pose_max_error;
   abs_pose_options.ransac_options.min_inlier_ratio =
       options.abs_pose_min_inlier_ratio;
+  
+  // 使用高置信度避免P3P RANSAC过早终止
+  // 过早终止可能导致位姿估计不准确，影响注册质量
   // Use high confidence to avoid preemptive termination of P3P RANSAC
   // - too early termination may lead to bad registration.
   abs_pose_options.ransac_options.min_num_trials = 100;
   abs_pose_options.ransac_options.max_num_trials = 10000;
   abs_pose_options.ransac_options.confidence = 0.99999;
 
+  // 配置位姿优化的参数
   AbsolutePoseRefinementOptions abs_pose_refinement_options;
+  
+  // 根据相机的使用历史决定是否需要优化相机参数
+  // 这是一个重要的策略：避免重复优化已经稳定的相机参数
   if (num_reg_images_per_camera_[image.CameraId()] > 0) {
+    // 该相机已经从其他图像中得到了优化
     // Camera already refined from another image with the same camera.
     if (camera.HasBogusParams(options.min_focal_length_ratio,
                               options.max_focal_length_ratio,
                               options.max_extra_param)) {
+      // 如果之前优化的相机参数异常，重置参数并重新估计
       // Previously refined camera has bogus parameters,
       // so reset parameters and try to re-estimage.
       camera.SetParams(database_cache_->Camera(image.CameraId()).Params());
@@ -778,11 +875,13 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
       abs_pose_refinement_options.refine_focal_length = true;
       abs_pose_refinement_options.refine_extra_params = true;
     } else {
+      // 相机参数正常，固定使用已优化的参数
       abs_pose_options.estimate_focal_length = false;
       abs_pose_refinement_options.refine_focal_length = false;
       abs_pose_refinement_options.refine_extra_params = false;
     }
   } else {
+    // 该相机尚未被优化过，需要重新估计参数
     // Camera not refined before. Note that the camera parameters might have
     // been changed before but the image was filtered, so we explicitly reset
     // the camera parameters and try to re-estimate them.
@@ -792,59 +891,76 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
     abs_pose_refinement_options.refine_extra_params = true;
   }
 
+  // 根据全局选项决定是否优化焦距
   if (!options.abs_pose_refine_focal_length) {
     abs_pose_options.estimate_focal_length = false;
     abs_pose_refinement_options.refine_focal_length = false;
   }
 
+  // 根据全局选项决定是否优化额外参数（如畸变参数）
   if (!options.abs_pose_refine_extra_params) {
     abs_pose_refinement_options.refine_extra_params = false;
   }
 
-  size_t num_inliers;
-  std::vector<char> inlier_mask;
+  // 执行绝对位姿估计
+  size_t num_inliers;              // 内点数量
+  std::vector<char> inlier_mask;   // 内点掩码，标记哪些对应关系是内点
 
+  // 使用PnP算法估计图像的绝对位姿
   if (!EstimateAbsolutePose(abs_pose_options, tri_points2D, tri_points3D,
                             &image.Qvec(), &image.Tvec(), &camera, &num_inliers,
                             &inlier_mask)) {
-    return false;
+    return false;  // 位姿估计失败
   }
 
+  // 检查内点数量是否满足最小要求
+  // 内点数量太少说明位姿估计不可靠
   if (num_inliers < static_cast<size_t>(options.abs_pose_min_num_inliers)) {
     return false;
   }
 
   //////////////////////////////////////////////////////////////////////////////
+  // 位姿优化
   // Pose refinement
   //////////////////////////////////////////////////////////////////////////////
 
+  // 对估计得到的位姿进行非线性优化，提高精度
   if (!RefineAbsolutePose(abs_pose_refinement_options, inlier_mask,
                           tri_points2D, tri_points3D, &image.Qvec(),
                           &image.Tvec(), &camera)) {
-    return false;
+    return false;  // 位姿优化失败
   }
 
   //////////////////////////////////////////////////////////////////////////////
+  // 继续轨迹构建
   // Continue tracks
   //////////////////////////////////////////////////////////////////////////////
 
+  // 将图像注册到重建中
   reconstruction_->RegisterImage(image_id);
-  RegisterImageEvent(image_id);
+  RegisterImageEvent(image_id);  // 触发注册事件，更新统计信息
 
+  // 为所有内点更新3D点的观测轨迹
+  // 这是增量式重建的关键步骤：将新图像的观测添加到已有的3D点轨迹中
   for (size_t i = 0; i < inlier_mask.size(); ++i) {
-    if (inlier_mask[i]) {
+    if (inlier_mask[i]) {  // 只处理内点
       const point2D_t point2D_idx = tri_corrs[i].first;
       const Point2D& point2D = image.Point2D(point2D_idx);
+      
+      // 如果该2D点还没有关联的3D点（理论上不应该发生，但作为安全检查）
       if (!point2D.HasPoint3D()) {
         const point3D_t point3D_id = tri_corrs[i].second;
+        // 创建轨迹元素，记录该3D点在当前图像中的观测
         const TrackElement track_el(image_id, point2D_idx);
+        // 将观测添加到3D点的轨迹中
         reconstruction_->AddObservation(point3D_id, track_el);
+        // 标记该3D点已被修改，用于后续的三角化和优化
         triangulator_->AddModifiedPoint3D(point3D_id);
       }
     }
   }
 
-  return true;
+  return true;  // 图像注册成功
 }
 
 size_t IncrementalMapper::TriangulateImage(

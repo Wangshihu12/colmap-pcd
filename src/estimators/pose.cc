@@ -76,84 +76,129 @@ void EstimateAbsolutePoseKernel(const Camera& camera,
 
 }  // namespace
 
+/**
+ * 绝对位姿估计函数（PnP问题求解）
+ * 
+ * 该函数解决Perspective-n-Point (PnP)问题，即通过已知的2D-3D点对应关系
+ * 估计相机的绝对位姿（位置和姿态）。支持同时估计焦距参数和使用RANSAC
+ * 进行鲁棒估计以处理外点。
+ * 
+ * @param options 绝对位姿估计的配置选项
+ * @param points2D 图像中的2D观测点
+ * @param points3D 对应的3D世界坐标点
+ * @param qvec 输出相机姿态四元数 [w, x, y, z]
+ * @param tvec 输出相机位置向量 [x, y, z]
+ * @param camera 相机参数对象，可能被修改(如果估计焦距)
+ * @param num_inliers 输出内点数量
+ * @param inlier_mask 输出内点掩码，标记哪些点对是内点
+ * @return 估计成功返回true，失败返回false
+ */
 bool EstimateAbsolutePose(const AbsolutePoseEstimationOptions& options,
                           const std::vector<Eigen::Vector2d>& points2D,
                           const std::vector<Eigen::Vector3d>& points3D,
                           Eigen::Vector4d* qvec, Eigen::Vector3d* tvec,
                           Camera* camera, size_t* num_inliers,
                           std::vector<char>* inlier_mask) {
+  // 检查输入参数的有效性
   options.Check();
 
+  // 生成焦距因子列表
   std::vector<double> focal_length_factors;
+  
   if (options.estimate_focal_length) {
-    // Generate focal length factors using a quadratic function,
-    // such that more samples are drawn for small focal lengths
+    // 如果需要估计焦距，生成一系列焦距因子进行测试
+    // 使用二次函数生成更多的小焦距样本，因为小焦距通常更敏感
     focal_length_factors.reserve(options.num_focal_length_samples + 1);
-    const double fstep = 1.0 / options.num_focal_length_samples;
+    const double fstep = 1.0 / options.num_focal_length_samples;  // 步长
     const double fscale =
-        options.max_focal_length_ratio - options.min_focal_length_ratio;
+        options.max_focal_length_ratio - options.min_focal_length_ratio;  // 焦距范围
+    
+    // 使用二次函数 f*f 生成焦距因子，使得更多样本集中在小焦距区域
     for (double f = 0; f <= 1.0; f += fstep) {
       focal_length_factors.push_back(options.min_focal_length_ratio +
                                      fscale * f * f);
     }
   } else {
+    // 如果不估计焦距，只使用当前焦距(因子为1)
     focal_length_factors.reserve(1);
     focal_length_factors.push_back(1);
   }
 
+  // 准备多线程处理
+  // 为每个焦距因子创建一个future对象，用于异步处理
   std::vector<std::future<void>> futures;
   futures.resize(focal_length_factors.size());
+  
+  // 为每个焦距因子创建一个报告对象，存储RANSAC结果
   std::vector<typename AbsolutePoseRANSAC::Report,
               Eigen::aligned_allocator<typename AbsolutePoseRANSAC::Report>>
       reports;
   reports.resize(focal_length_factors.size());
 
+  // 创建线程池，线程数为用户指定数量和焦距因子数量的最小值
+  // 这避免了创建过多线程导致的资源浪费
   ThreadPool thread_pool(std::min(
       options.num_threads, static_cast<int>(focal_length_factors.size())));
 
+  // 为每个焦距因子启动一个异步任务
   for (size_t i = 0; i < focal_length_factors.size(); ++i) {
     futures[i] = thread_pool.AddTask(
-        EstimateAbsolutePoseKernel, *camera, focal_length_factors[i], points2D,
-        points3D, options.ransac_options, &reports[i]);
+        EstimateAbsolutePoseKernel,    // 核心位姿估计函数
+        *camera,                       // 相机参数
+        focal_length_factors[i],       // 当前焦距因子
+        points2D,                      // 2D观测点
+        points3D,                      // 3D世界点
+        options.ransac_options,        // RANSAC参数
+        &reports[i]);                  // 输出报告
   }
 
-  double focal_length_factor = 0;
-  Eigen::Matrix3x4d proj_matrix;
-  *num_inliers = 0;
-  inlier_mask->clear();
+  // 初始化最佳结果变量
+  double focal_length_factor = 0;    // 最佳焦距因子
+  Eigen::Matrix3x4d proj_matrix;     // 最佳投影矩阵 [R|t]
+  *num_inliers = 0;                  // 最佳内点数量
+  inlier_mask->clear();              // 清空内点掩码
 
-  // Find best model among all focal lengths.
+  // 等待所有线程完成，并找到最佳模型
   for (size_t i = 0; i < focal_length_factors.size(); ++i) {
-    futures[i].get();
-    const auto report = reports[i];
+    futures[i].get();  // 等待第i个任务完成
+    const auto report = reports[i];  // 获取第i个任务的结果
+    
+    // 如果当前任务成功且内点数量更多，更新最佳结果
     if (report.success && report.support.num_inliers > *num_inliers) {
-      *num_inliers = report.support.num_inliers;
-      proj_matrix = report.model;
-      *inlier_mask = report.inlier_mask;
-      focal_length_factor = focal_length_factors[i];
+      *num_inliers = report.support.num_inliers;  // 更新最佳内点数量
+      proj_matrix = report.model;                 // 更新最佳投影矩阵
+      *inlier_mask = report.inlier_mask;          // 更新内点掩码
+      focal_length_factor = focal_length_factors[i];  // 记录最佳焦距因子
     }
   }
 
+  // 如果没有找到任何有效的内点，估计失败
   if (*num_inliers == 0) {
     return false;
   }
 
-  // Scale output camera with best estimated focal length.
+  // 如果估计了焦距且找到了有效解，更新相机参数
   if (options.estimate_focal_length && *num_inliers > 0) {
+    // 获取相机参数中焦距参数的索引
     const std::vector<size_t>& focal_length_idxs = camera->FocalLengthIdxs();
+    
+    // 将最佳焦距因子应用到相机的焦距参数上
     for (const size_t idx : focal_length_idxs) {
       camera->Params(idx) *= focal_length_factor;
     }
   }
 
-  // Extract pose parameters.
-  *qvec = RotationMatrixToQuaternion(proj_matrix.leftCols<3>());
-  *tvec = proj_matrix.rightCols<1>();
+  // 从投影矩阵中提取位姿参数
+  // 投影矩阵的格式为 [R|t]，其中R是3x3旋转矩阵，t是3x1平移向量
+  *qvec = RotationMatrixToQuaternion(proj_matrix.leftCols<3>());  // 提取旋转部分并转换为四元数
+  *tvec = proj_matrix.rightCols<1>();                             // 提取平移部分
 
+  // 检查结果是否包含NaN值
   if (IsNaN(*qvec) || IsNaN(*tvec)) {
     return false;
   }
 
+  // 位姿估计成功
   return true;
 }
 

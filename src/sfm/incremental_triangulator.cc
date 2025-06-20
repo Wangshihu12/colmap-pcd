@@ -58,61 +58,111 @@ IncrementalTriangulator::IncrementalTriangulator(
     : correspondence_graph_(correspondence_graph),
       reconstruction_(reconstruction) {}
 
+/**
+ * 对指定图像进行三角化处理
+ * 
+ * 这是增量式SfM重建中的核心函数，用于为新注册的图像创建3D点。
+ * 函数会遍历图像中的所有2D特征点，寻找与其他已注册图像的对应关系，
+ * 然后通过三角化创建新的3D点或将2D点关联到已有的3D点。
+ * 
+ * @param options 三角化选项，包含各种阈值和约束参数
+ * @param image_id 要进行三角化的图像ID
+ * @return 成功三角化的2D点数量（即新建或关联的观测数量）
+ */
 size_t IncrementalTriangulator::TriangulateImage(const Options& options,
                                                  const image_t image_id) {
+  // 检查选项参数的有效性，确保所有阈值都在合理范围内
   CHECK(options.Check());
 
+  // 记录本次三角化成功处理的2D点数量
   size_t num_tris = 0;
 
+  // 清空各种缓存数据结构，确保使用最新的重建状态
+  // 包括相机参数异常检查缓存、合并尝试记录、找到的对应关系缓存等
   ClearCaches();
 
+  // 获取要处理的图像对象
   const Image& image = reconstruction_->Image(image_id);
+  
+  // 检查图像是否已经注册（即是否已经估计出相机位姿）
+  // 只有已注册的图像才能参与三角化，因为需要已知的相机位姿
   if (!image.IsRegistered()) {
-    return num_tris;
+    return num_tris;  // 未注册的图像直接返回0
   }
 
+  // 获取该图像对应的相机参数
   const Camera& camera = reconstruction_->Camera(image.CameraId());
+  
+  // 检查相机参数是否异常（如焦距过大/过小、畸变参数异常等）
+  // 异常的相机参数会导致不可靠的三角化结果
   if (HasCameraBogusParams(options, camera)) {
-    return num_tris;
+    return num_tris;  // 相机参数异常的图像跳过处理
   }
 
-  // Correspondence data for reference observation in given image. We iterate
-  // over all observations of the image and each observation once becomes
-  // the reference correspondence.
+  // 创建参考对应关系数据结构
+  // 这个结构体包含了当前图像的完整信息，在后续处理中作为参考点
   CorrData ref_corr_data;
-  ref_corr_data.image_id = image_id;
-  ref_corr_data.image = &image;
-  ref_corr_data.camera = &camera;
+  ref_corr_data.image_id = image_id;     // 图像ID
+  ref_corr_data.image = &image;          // 图像对象指针
+  ref_corr_data.camera = &camera;       // 相机对象指针
 
-  // Container for correspondences from reference observation to other images.
+  // 用于存储从参考观测到其他图像的对应关系
+  // 每次处理一个2D点时，这里会存储所有与该点有对应关系的其他图像中的点
   std::vector<CorrData> corrs_data;
 
-  // Try to triangulate all image observations.
+  // 遍历当前图像中的所有2D特征点，逐个尝试三角化
   for (point2D_t point2D_idx = 0; point2D_idx < image.NumPoints2D();
        ++point2D_idx) {
+    
+    // 查找当前2D点在其他图像中的对应关系
+    // Find函数会搜索与当前点匹配的所有其他图像中的特征点
+    // max_transitivity参数控制搜索的传递深度（多跳匹配）
     const size_t num_triangulated =
         Find(options, image_id, point2D_idx,
              static_cast<size_t>(options.max_transitivity), &corrs_data);
+    
+    // 如果没有找到任何对应关系，跳过当前点
     if (corrs_data.empty()) {
       continue;
     }
 
+    // 获取当前处理的2D点对象
     const Point2D& point2D = image.Point2D(point2D_idx);
-    ref_corr_data.point2D_idx = point2D_idx;
-    ref_corr_data.point2D = &point2D;
+    
+    // 设置参考对应关系数据的具体2D点信息
+    ref_corr_data.point2D_idx = point2D_idx;  // 2D点在图像中的索引
+    ref_corr_data.point2D = &point2D;         // 2D点对象指针
 
+    // 根据找到的对应关系中已三角化的点数量，采用不同的处理策略
     if (num_triangulated == 0) {
+      // 情况1：所有对应点都未三角化
+      // 这意味着我们需要创建全新的3D点
+      
+      // 将当前参考点也加入对应关系列表
       corrs_data.push_back(ref_corr_data);
+      
+      // 调用Create函数尝试创建新的3D点
+      // Create会验证几何约束（如三角化角度），如果满足条件就创建3D点
       num_tris += Create(options, corrs_data);
     } else {
-      // Continue correspondences to existing 3D points.
+      // 情况2：部分对应点已经三角化
+      // 这种情况下我们有两个任务：
+      // 1. 尝试将当前点关联到已有的3D点（Continue操作）
+      // 2. 为未三角化的对应点创建新的3D点（Create操作）
+      
+      // 首先尝试将当前参考点继续到已有的3D点轨迹中
+      // Continue会检查当前点到已有3D点的重投影误差，如果足够小就建立关联
       num_tris += Continue(options, ref_corr_data, corrs_data);
-      // Create points from correspondences that are not continued.
+      
+      // 然后尝试为剩余未三角化的对应点创建新的3D点
+      // 将参考点加入列表，因为它可能仍然没有被Continue操作处理
       corrs_data.push_back(ref_corr_data);
       num_tris += Create(options, corrs_data);
     }
   }
 
+  // 返回本次三角化操作成功处理的2D点总数
+  // 这个数字包括新创建的3D点观测和新关联到已有3D点的观测
   return num_tris;
 }
 
@@ -287,66 +337,103 @@ size_t IncrementalTriangulator::MergeAllTracks(const Options& options) {
   return num_merged;
 }
 
+/**
+ * 重三角化函数 - 对已有重建进行补充三角化
+ * 
+ * 该函数是增量式SfM重建中的重要优化步骤，用于提高重建的完整性。
+ * 它重新检查那些三角化率较低的图像对，尝试为更多的特征匹配创建3D点，
+ * 从而增加重建的密度和鲁棒性。这对于处理纹理稀少或匹配困难的区域特别有效。
+ * 
+ * @param options 三角化选项，包含各种阈值和约束参数
+ * @return 新创建的3D点数量
+ */
 size_t IncrementalTriangulator::Retriangulate(const Options& options) {
+  // 检查选项参数的有效性
   CHECK(options.Check());
 
+  // 记录本次重三角化创建的3D点总数
   size_t num_tris = 0;
 
+  // 清空缓存，确保使用最新的重建状态
+  // 这包括清空各种临时数据结构和统计信息
   ClearCaches();
 
+  // 创建重三角化专用的选项配置
+  // 重三角化使用更宽松的角度误差阈值，因为这是对已有重建的补充
   Options re_options = options;
   re_options.continue_max_angle_error = options.re_max_angle_error;
 
+  // 遍历重建中的所有图像对
+  // 图像对记录了两张图像之间的匹配统计信息
   for (const auto& image_pair : reconstruction_->ImagePairs()) {
+    // 计算当前图像对的三角化比例
+    // 三角化比例 = 已三角化的对应关系数量 / 总对应关系数量
     // Only perform retriangulation for under-reconstructed image pairs.
     const double tri_ratio =
         static_cast<double>(image_pair.second.num_tri_corrs) /
         static_cast<double>(image_pair.second.num_total_corrs);
+    
+    // 如果三角化比例已经足够高，跳过该图像对
+    // 这样可以避免在已经充分重建的区域浪费计算资源
     if (tri_ratio >= options.re_min_ratio) {
       continue;
     }
 
+    // 从图像对ID中提取两个图像的ID
     // Check if images are registered yet.
-
     image_t image_id1;
     image_t image_id2;
     Database::PairIdToImagePair(image_pair.first, &image_id1, &image_id2);
 
+    // 获取第一张图像并检查是否已注册
+    // 只有已注册的图像才能参与重三角化，因为需要已知的相机位姿
     const Image& image1 = reconstruction_->Image(image_id1);
     if (!image1.IsRegistered()) {
       continue;
     }
 
+    // 获取第二张图像并检查是否已注册
     const Image& image2 = reconstruction_->Image(image_id2);
     if (!image2.IsRegistered()) {
       continue;
     }
 
+    // 限制每个图像对的最大重三角化尝试次数
+    // 避免在困难的图像对上反复尝试，浪费计算资源
     // Only perform retriangulation for a maximum number of trials.
-
     int& num_re_trials = re_num_trials_[image_pair.first];
     if (num_re_trials >= options.re_max_trials) {
       continue;
     }
-    num_re_trials += 1;
+    num_re_trials += 1;  // 增加尝试次数计数器
 
+    // 获取两张图像的相机参数
     const Camera& camera1 = reconstruction_->Camera(image1.CameraId());
     const Camera& camera2 = reconstruction_->Camera(image2.CameraId());
+    
+    // 检查相机参数是否异常
+    // 异常的相机参数会导致不可靠的三角化结果
     if (HasCameraBogusParams(options, camera1) ||
         HasCameraBogusParams(options, camera2)) {
       continue;
     }
 
+    // 查找两张图像之间的特征匹配关系
     // Find correspondences and perform retriangulation.
-
     const FeatureMatches& corrs =
         correspondence_graph_->FindCorrespondencesBetweenImages(image_id1,
                                                                 image_id2);
 
+    // 遍历所有特征匹配，尝试进行重三角化
     for (const auto& corr : corrs) {
+      // 获取匹配的两个2D特征点
       const Point2D& point2D1 = image1.Point2D(corr.point2D_idx1);
       const Point2D& point2D2 = image2.Point2D(corr.point2D_idx2);
 
+      // 处理已有3D点的情况
+      // 如果两个2D点都已经关联到3D点，需要区分两种情况：
+      // 1. 关联到同一个3D点：无需处理，已经正确关联
+      // 2. 关联到不同3D点：不进行重三角化，避免破坏现有结构
       // Two cases are possible here: both points belong to the same 3D point
       // or to different 3D points. In the former case, there is nothing
       // to do. In the latter case, we do not attempt retriangulation,
@@ -356,6 +443,8 @@ size_t IncrementalTriangulator::Retriangulate(const Options& options) {
         continue;
       }
 
+      // 创建第一个对应关系数据结构
+      // 包含图像、相机、2D点等完整信息，用于后续三角化
       CorrData corr_data1;
       corr_data1.image_id = image_id1;
       corr_data1.point2D_idx = corr.point2D_idx1;
@@ -363,6 +452,7 @@ size_t IncrementalTriangulator::Retriangulate(const Options& options) {
       corr_data1.camera = &camera1;
       corr_data1.point2D = &point2D1;
 
+      // 创建第二个对应关系数据结构
       CorrData corr_data2;
       corr_data2.image_id = image_id2;
       corr_data2.point2D_idx = corr.point2D_idx2;
@@ -370,23 +460,38 @@ size_t IncrementalTriangulator::Retriangulate(const Options& options) {
       corr_data2.camera = &camera2;
       corr_data2.point2D = &point2D2;
 
+      // 根据2D点是否已有关联的3D点，分三种情况处理：
+
+      // 情况1：第一个点有3D点，第二个点没有
+      // 尝试将第二个点继续到现有的3D点轨迹中
       if (point2D1.HasPoint3D() && !point2D2.HasPoint3D()) {
         const std::vector<CorrData> corrs_data1 = {corr_data1};
         num_tris += Continue(re_options, corr_data2, corrs_data1);
-      } else if (!point2D1.HasPoint3D() && point2D2.HasPoint3D()) {
+      } 
+      // 情况2：第二个点有3D点，第一个点没有
+      // 尝试将第一个点继续到现有的3D点轨迹中
+      else if (!point2D1.HasPoint3D() && point2D2.HasPoint3D()) {
         const std::vector<CorrData> corrs_data2 = {corr_data2};
         num_tris += Continue(re_options, corr_data1, corrs_data2);
-      } else if (!point2D1.HasPoint3D() && !point2D2.HasPoint3D()) {
+      } 
+      // 情况3：两个点都没有3D点
+      // 尝试创建新的3D点
+      else if (!point2D1.HasPoint3D() && !point2D2.HasPoint3D()) {
         const std::vector<CorrData> corrs_data = {corr_data1, corr_data2};
+        // 注意：这里使用原始选项而不是宽松的重三角化选项
+        // 创建新点时使用更严格的阈值，避免引入低质量的3D点导致漂移
         // Do not use larger triangulation threshold as this causes
         // significant drift when creating points (options vs. re_options).
         num_tris += Create(options, corrs_data);
       }
+      // 如果两个点都已有3D点，则跳过
+      // 在重三角化中我们不合并已有的3D点，避免破坏现有结构
       // Else both points have a 3D point, but we do not want to
       // merge points in retriangulation.
     }
   }
 
+  // 返回本次重三角化创建的3D点总数
   return num_tris;
 }
 
@@ -418,52 +523,97 @@ void IncrementalTriangulator::ClearCaches() {
   found_corrs_.clear();
 }
 
+/**
+ * 查找指定2D点的对应关系
+ * 
+ * 这个函数是三角化过程中的核心步骤，负责寻找给定图像中某个2D特征点
+ * 在其他已注册图像中的对应点。支持直接匹配和传递性匹配两种模式。
+ * 
+ * @param options 三角化选项参数
+ * @param image_id 参考图像ID
+ * @param point2D_idx 参考图像中2D点的索引
+ * @param transitivity 传递性搜索深度，1表示直接匹配，>1表示多跳匹配
+ * @param corrs_data 输出参数，存储找到的有效对应关系数据
+ * @return 已经三角化的对应点数量
+ */
 size_t IncrementalTriangulator::Find(const Options& options,
                                      const image_t image_id,
                                      const point2D_t point2D_idx,
                                      const size_t transitivity,
                                      std::vector<CorrData>* corrs_data) {
+  
+  // 声明指向对应关系列表的指针，用于统一处理不同搜索模式的结果
   const std::vector<CorrespondenceGraph::Correspondence>* found_corrs_ptr =
       nullptr;
+  
+  // 根据传递性参数选择不同的搜索策略
   if (transitivity == 1) {
+    // 直接匹配模式：只查找直接连接的对应关系
+    // 这是最常见的情况，查找与当前2D点直接匹配的其他图像中的点
     found_corrs_ptr =
         &correspondence_graph_->FindCorrespondences(image_id, point2D_idx);
   } else {
+    // 传递性匹配模式：查找多跳连接的对应关系
+    // 例如：A图像中的点1匹配B图像中的点2，B图像中的点2匹配C图像中的点3
+    // 则A图像中的点1与C图像中的点3形成传递性对应关系
+    // 这种方式可以发现更多的对应关系，提高三角化的成功率
     correspondence_graph_->FindTransitiveCorrespondences(
         image_id, point2D_idx, transitivity, &found_corrs_);
-    found_corrs_ptr = &found_corrs_;
+    found_corrs_ptr = &found_corrs_;  // 使用成员变量存储传递性搜索结果
   }
 
+  // 清空输出容器并预分配空间，提高性能
   corrs_data->clear();
   corrs_data->reserve(found_corrs_ptr->size());
 
+  // 统计已经三角化的对应点数量
+  // 这个数字将用于后续的处理策略选择
   size_t num_triangulated = 0;
 
+  // 遍历所有找到的对应关系，进行有效性检查和数据准备
   for (const auto& corr : *found_corrs_ptr) {
+    
+    // 获取对应点所在的图像对象
     const Image& corr_image = reconstruction_->Image(corr.image_id);
+    
+    // 检查对应图像是否已经注册
+    // 未注册的图像没有已知的相机位姿，无法用于三角化
     if (!corr_image.IsRegistered()) {
-      continue;
+      continue;  // 跳过未注册的图像
     }
 
+    // 获取对应图像的相机参数
     const Camera& corr_camera = reconstruction_->Camera(corr_image.CameraId());
+    
+    // 检查相机参数是否异常
+    // 异常的相机参数（如过大的焦距、畸变系数等）会导致不可靠的三角化
     if (HasCameraBogusParams(options, corr_camera)) {
-      continue;
+      continue;  // 跳过参数异常的相机
     }
 
+    // 为当前对应关系创建完整的数据结构
+    // CorrData包含了进行三角化所需的所有信息
     CorrData corr_data;
-    corr_data.image_id = corr.image_id;
-    corr_data.point2D_idx = corr.point2D_idx;
-    corr_data.image = &corr_image;
-    corr_data.camera = &corr_camera;
-    corr_data.point2D = &corr_image.Point2D(corr.point2D_idx);
+    corr_data.image_id = corr.image_id;           // 对应图像的ID
+    corr_data.point2D_idx = corr.point2D_idx;    // 对应点在图像中的索引
+    corr_data.image = &corr_image;               // 对应图像对象的指针
+    corr_data.camera = &corr_camera;             // 对应相机对象的指针
+    corr_data.point2D = &corr_image.Point2D(corr.point2D_idx);  // 对应2D点对象的指针
 
+    // 将有效的对应关系添加到输出列表中
     corrs_data->push_back(corr_data);
 
+    // 检查当前对应点是否已经关联到某个3D点
+    // 已三角化的点可以用于Continue操作（将新点关联到已有轨迹）
     if (corr_data.point2D->HasPoint3D()) {
-      num_triangulated += 1;
+      num_triangulated += 1;  // 增加已三角化计数
     }
   }
 
+  // 返回已经三角化的对应点数量
+  // 这个信息将帮助调用者决定使用Create还是Continue策略：
+  // - 如果num_triangulated == 0：所有点都未三角化，使用Create创建新3D点
+  // - 如果num_triangulated > 0：部分点已三角化，先尝试Continue再Create
   return num_triangulated;
 }
 

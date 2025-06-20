@@ -403,80 +403,118 @@ bool SiftMatchingOptions::Check() const {
   return true;
 }
 
+/**
+ * 在CPU上提取SIFT特征的函数
+ * 
+ * 该函数使用VLFeat库实现了完整的SIFT特征提取流程，包括关键点检测、方向计算和描述符生成。
+ * SIFT(尺度不变特征变换)是一种鲁棒的局部特征，具有对尺度、旋转、亮度变化的不变性。
+ * 
+ * @param options SIFT提取参数配置
+ * @param bitmap 输入灰度图像
+ * @param keypoints 输出检测到的关键点
+ * @param descriptors 输出特征描述符(可选，如果为nullptr则只检测关键点)
+ * @return 提取成功返回true，失败返回false
+ */
 bool ExtractSiftFeaturesCPU(const SiftExtractionOptions& options,
                             const Bitmap& bitmap, FeatureKeypoints* keypoints,
                             FeatureDescriptors* descriptors) {
+
+  // 检查配置参数有效性
   CHECK(options.Check());
+  // 确保输入是灰度图像
   CHECK(bitmap.IsGrey());
+  // 确保关键点输出指针非空
   CHECK_NOTNULL(keypoints);
 
+  // 确认不使用仿射形状估计和域大小池化选项
+  // 这两个选项需要特殊的CPU实现，在本函数中不支持
   CHECK(!options.estimate_affine_shape);
   CHECK(!options.domain_size_pooling);
 
+  // 暗度自适应功能在当前实现中不可用，发出警告
   if (options.darkness_adaptivity) {
     WarnDarknessAdaptivityNotAvailable();
   }
 
-  // Setup SIFT extractor.
+  // 创建和设置VLFeat SIFT滤波器
+  // 使用智能指针自动管理资源释放
   std::unique_ptr<VlSiftFilt, void (*)(VlSiftFilt*)> sift(
       vl_sift_new(bitmap.Width(), bitmap.Height(), options.num_octaves,
                   options.octave_resolution, options.first_octave),
       &vl_sift_delete);
+  // 检查SIFT滤波器是否创建成功
   if (!sift) {
     return false;
   }
 
+  // 设置峰值阈值(控制关键点检测的灵敏度)
   vl_sift_set_peak_thresh(sift.get(), options.peak_threshold);
+  // 设置边缘阈值(过滤掉边缘上不稳定的关键点)
   vl_sift_set_edge_thresh(sift.get(), options.edge_threshold);
 
-  // Iterate through octaves.
-  std::vector<size_t> level_num_features;
-  std::vector<FeatureKeypoints> level_keypoints;
-  std::vector<FeatureDescriptors> level_descriptors;
+  // 存储每个DOG(高斯差分)层级的信息
+  std::vector<size_t> level_num_features; // 每层的特征数量
+  std::vector<FeatureKeypoints> level_keypoints; // 每层的关键点
+  std::vector<FeatureDescriptors> level_descriptors; // 每层的描述符
+
+  // 标记是否是第一个八度处理
   bool first_octave = true;
+
+  // 逐个八度处理图像
   while (true) {
     if (first_octave) {
+      // 处理第一个八度需要将图像数据转换为浮点格式
       const std::vector<uint8_t> data_uint8 = bitmap.ConvertToRowMajorArray();
       std::vector<float> data_float(data_uint8.size());
+
+      // 将0-255的像素值归一化到0-1范围
       for (size_t i = 0; i < data_uint8.size(); ++i) {
         data_float[i] = static_cast<float>(data_uint8[i]) / 255.0f;
       }
+
+      // 处理第一个八度，如果返回非零值表示处理完成
       if (vl_sift_process_first_octave(sift.get(), data_float.data())) {
         break;
       }
       first_octave = false;
     } else {
+      // 处理后续八度，如果返回非零值表示所有八度处理完成
       if (vl_sift_process_next_octave(sift.get())) {
         break;
       }
     }
 
-    // Detect keypoints.
+    // 在当前八度中检测关键点
     vl_sift_detect(sift.get());
 
-    // Extract detected keypoints.
+    // 获取检测到的关键点列表
     const VlSiftKeypoint* vl_keypoints = vl_sift_get_keypoints(sift.get());
     const int num_keypoints = vl_sift_get_nkeypoints(sift.get());
+    // 如果当前八度没有检测到关键点，继续处理下一个八度
     if (num_keypoints == 0) {
       continue;
     }
 
-    // Extract features with different orientations per DOG level.
-    size_t level_idx = 0;
-    int prev_level = -1;
+    // 为每个DOG层级中的关键点提取不同方向的特征
+    size_t level_idx = 0; // 当前DOG层级中的关键点索引
+    int prev_level = -1; // 前一个处理的DOG层级
+
+    // 遍历所有关键点
     for (int i = 0; i < num_keypoints; ++i) {
+      // 检查是否进入新的DOG层级
       if (vl_keypoints[i].is != prev_level) {
         if (i > 0) {
-          // Resize containers of previous DOG level.
+          // 调整前一个DOG层级容器的大小以匹配实际提取的特征数量
           level_keypoints.back().resize(level_idx);
           if (descriptors != nullptr) {
             level_descriptors.back().conservativeResize(level_idx, 128);
           }
         }
 
-        // Add containers for new DOG level.
+        // 为新的DOG层级创建容器
         level_idx = 0;
         level_num_features.push_back(0);
+        // 预分配足够大的空间以容纳最大可能的特征数
         level_keypoints.emplace_back(options.max_num_orientations *
                                      num_keypoints);
         if (descriptors != nullptr) {
@@ -485,76 +523,100 @@ bool ExtractSiftFeaturesCPU(const SiftExtractionOptions& options,
         }
       }
 
+      // 更新当前DOG层级的特征计数
       level_num_features.back() += 1;
       prev_level = vl_keypoints[i].is;
 
-      // Extract feature orientations.
-      double angles[4];
+      // 计算关键点的主方向
+      double angles[4]; // 最多支持4个方向
       int num_orientations;
+
       if (options.upright) {
+        // 如果使用直立SIFT，则只使用0度方向
         num_orientations = 1;
         angles[0] = 0.0;
       } else {
+        // 否则计算关键点的主方向(最多4个)
         num_orientations = vl_sift_calc_keypoint_orientations(
             sift.get(), angles, &vl_keypoints[i]);
       }
 
-      // Note that this is different from SiftGPU, which selects the top
-      // global maxima as orientations while this selects the first two
-      // local maxima. It is not clear which procedure is better.
+      // 注释说明VLFeat和SiftGPU在选择方向上的区别
+      // VLFeat选择前几个局部最大值，而SiftGPU选择全局最大值
       const int num_used_orientations =
           std::min(num_orientations, options.max_num_orientations);
 
+      // 为每个方向创建一个关键点和描述符
       for (int o = 0; o < num_used_orientations; ++o) {
+        // 创建关键点(x, y, sigma, orientation)
+        // 注意x和y坐标加0.5是为了转换到像素中心
         level_keypoints.back()[level_idx] =
             FeatureKeypoint(vl_keypoints[i].x + 0.5f, vl_keypoints[i].y + 0.5f,
                             vl_keypoints[i].sigma, angles[o]);
+
+        // 如果需要计算描述符
         if (descriptors != nullptr) {
+          // 创建临时描述符矩阵(SIFT描述符为128维向量)
           Eigen::MatrixXf desc(1, 128);
+          // 计算关键点在当前方向上的描述符
           vl_sift_calc_keypoint_descriptor(sift.get(), desc.data(),
                                            &vl_keypoints[i], angles[o]);
+
+          // 根据配置选择不同的描述符归一化方式
           if (options.normalization ==
               SiftExtractionOptions::Normalization::L2) {
+            // L2归一化: 描述符的欧氏长度归一为1
             desc = L2NormalizeFeatureDescriptors(desc);
           } else if (options.normalization ==
                      SiftExtractionOptions::Normalization::L1_ROOT) {
+            // L1-ROOT归一化: 先L1归一化，再取平方根
             desc = L1RootNormalizeFeatureDescriptors(desc);
           } else {
             LOG(FATAL) << "Normalization type not supported";
           }
 
+          // 将浮点描述符转换为无符号字节格式并存储
           level_descriptors.back().row(level_idx) =
               FeatureDescriptorsToUnsignedByte(desc);
         }
 
+        // 移动到下一个特征索引
         level_idx += 1;
       }
     }
 
-    // Resize containers for last DOG level in octave.
+    // 调整当前八度最后一个DOG层级容器的大小
     level_keypoints.back().resize(level_idx);
     if (descriptors != nullptr) {
       level_descriptors.back().conservativeResize(level_idx, 128);
     }
   }
 
-  // Determine how many DOG levels to keep to satisfy max_num_features option.
+  // 确定保留哪些DOG层级以满足max_num_features选项
+  // 从高层(更粗尺度)到低层(更精细尺度)依次选择，直到达到最大特征数
   int first_level_to_keep = 0;
-  int num_features = 0;
-  int num_features_with_orientations = 0;
+  int num_features = 0; // 不考虑方向的特征总数
+  int num_features_with_orientations = 0; // 考虑方向的特征总数
+
+  // 从最高层级(最粗尺度)开始向下计算
   for (int i = level_keypoints.size() - 1; i >= 0; --i) {
-    num_features += level_num_features[i];
-    num_features_with_orientations += level_keypoints[i].size();
+    num_features += level_num_features[i]; // 累加当前层级的特征数
+    num_features_with_orientations += level_keypoints[i].size(); // 累加考虑方向后的特征数
+
+    // 如果特征总数超过最大限制，记录当前层级作为起始保留层级
     if (num_features > options.max_num_features) {
       first_level_to_keep = i;
       break;
     }
   }
 
-  // Extract the features to be kept.
+  // 提取需要保留的特征
   {
     size_t k = 0;
+    // 调整关键点数组大小以容纳所有保留的特征
     keypoints->resize(num_features_with_orientations);
+
+    // 从第一个保留层级开始复制关键点
     for (size_t i = first_level_to_keep; i < level_keypoints.size(); ++i) {
       for (size_t j = 0; j < level_keypoints[i].size(); ++j) {
         (*keypoints)[k] = level_keypoints[i][j];
@@ -563,16 +625,22 @@ bool ExtractSiftFeaturesCPU(const SiftExtractionOptions& options,
     }
   }
 
-  // Compute the descriptors for the detected keypoints.
+  // 如果需要，计算保留关键点的描述符
   if (descriptors != nullptr) {
     size_t k = 0;
+    // 调整描述符矩阵大小
     descriptors->resize(num_features_with_orientations, 128);
+
+    // 复制对应的描述符
     for (size_t i = first_level_to_keep; i < level_keypoints.size(); ++i) {
       for (size_t j = 0; j < level_keypoints[i].size(); ++j) {
         descriptors->row(k) = level_descriptors[i].row(j);
         k += 1;
       }
     }
+
+    // 将VLFeat格式的描述符转换为UBC格式
+    // UBC格式是另一个常用的SIFT实现格式，这确保了与其他系统的兼容性
     *descriptors = TransformVLFeatToUBCFeatureDescriptors(*descriptors);
   }
 
