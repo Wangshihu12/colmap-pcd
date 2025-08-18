@@ -43,90 +43,115 @@
 
 namespace colmap {
 
+/**
+ * [功能描述]：自动重建控制器的构造函数，负责初始化所有重建流程所需的配置和组件
+ * @param options：重建选项配置，包含工作路径、数据类型、质量等参数
+ * @param reconstruction_manager：重建管理器指针，用于管理重建结果
+ */
 AutomaticReconstructionController::AutomaticReconstructionController(
-    const Options& options, ReconstructionManager* reconstruction_manager)
-    : options_(options),
-      reconstruction_manager_(reconstruction_manager),
-      active_thread_(nullptr) {
-  CHECK(ExistsDir(options_.workspace_path));
-  CHECK(ExistsDir(options_.image_path));
-  CHECK_NOTNULL(reconstruction_manager_);
+  const Options& options, ReconstructionManager* reconstruction_manager)
+  : options_(options),
+    reconstruction_manager_(reconstruction_manager),
+    active_thread_(nullptr) {
 
-  option_manager_.AddAllOptions();
+// 验证必要的路径和参数是否有效
+CHECK(ExistsDir(options_.workspace_path));  // 检查工作空间路径是否存在
+CHECK(ExistsDir(options_.image_path));      // 检查图像路径是否存在  
+CHECK_NOTNULL(reconstruction_manager_);     // 检查重建管理器指针是否为空
 
-  *option_manager_.image_path = options_.image_path;
-  *option_manager_.database_path =
-      JoinPaths(options_.workspace_path, "database.db");
+// 添加所有可用的配置选项到选项管理器
+option_manager_.AddAllOptions();
 
-  if (options_.data_type == DataType::VIDEO) {
-    option_manager_.ModifyForVideoData();
-  } else if (options_.data_type == DataType::INDIVIDUAL) {
-    option_manager_.ModifyForIndividualData();
-  } else if (options_.data_type == DataType::INTERNET) {
-    option_manager_.ModifyForInternetData();
-  } else {
-    LOG(FATAL) << "Data type not supported";
-  }
+// 设置基本路径配置
+*option_manager_.image_path = options_.image_path;  // 设置图像路径
+*option_manager_.database_path =                    // 设置数据库路径
+    JoinPaths(options_.workspace_path, "database.db");
 
-  CHECK(ExistsCameraModelWithName(options_.camera_model));
+// 根据数据类型调整配置参数
+if (options_.data_type == DataType::VIDEO) {
+  option_manager_.ModifyForVideoData();       // 视频数据优化配置
+} else if (options_.data_type == DataType::INDIVIDUAL) {
+  option_manager_.ModifyForIndividualData();  // 单张图像数据优化配置
+} else if (options_.data_type == DataType::INTERNET) {
+  option_manager_.ModifyForInternetData();    // 网络图像数据优化配置
+} else {
+  LOG(FATAL) << "Data type not supported";   // 不支持的数据类型
+}
 
-  if (options_.quality == Quality::LOW) {
-    option_manager_.ModifyForLowQuality();
-  } else if (options_.quality == Quality::MEDIUM) {
-    option_manager_.ModifyForMediumQuality();
-  } else if (options_.quality == Quality::HIGH) {
-    option_manager_.ModifyForHighQuality();
-  } else if (options_.quality == Quality::EXTREME) {
-    option_manager_.ModifyForExtremeQuality();
-  }
+// 验证相机模型是否有效
+CHECK(ExistsCameraModelWithName(options_.camera_model));
 
-  option_manager_.sift_extraction->num_threads = options_.num_threads;
-  option_manager_.sift_matching->num_threads = options_.num_threads;
-  option_manager_.mapper->num_threads = options_.num_threads;
-  option_manager_.poisson_meshing->num_threads = options_.num_threads;
+// 根据重建质量要求调整配置参数
+if (options_.quality == Quality::LOW) {
+  option_manager_.ModifyForLowQuality();      // 低质量模式配置
+} else if (options_.quality == Quality::MEDIUM) {
+  option_manager_.ModifyForMediumQuality();   // 中等质量模式配置
+} else if (options_.quality == Quality::HIGH) {
+  option_manager_.ModifyForHighQuality();     // 高质量模式配置
+} else if (options_.quality == Quality::EXTREME) {
+  option_manager_.ModifyForExtremeQuality();  // 极高质量模式配置
+}
 
-  ImageReaderOptions& reader_options = *option_manager_.image_reader;
-  reader_options.database_path = *option_manager_.database_path;
-  reader_options.image_path = *option_manager_.image_path;
-  if (!options_.mask_path.empty()) {
-    reader_options.mask_path = options_.mask_path;
-    option_manager_.image_reader->mask_path = options_.mask_path;
-    option_manager_.stereo_fusion->mask_path = options_.mask_path;
-  }
-  reader_options.single_camera = options_.single_camera;
-  reader_options.camera_model = options_.camera_model;
+// 设置各个处理模块的线程数量
+option_manager_.sift_extraction->num_threads = options_.num_threads;  // SIFT特征提取线程数
+option_manager_.sift_matching->num_threads = options_.num_threads;    // SIFT特征匹配线程数
+option_manager_.mapper->num_threads = options_.num_threads;           // 映射器线程数
+option_manager_.poisson_meshing->num_threads = options_.num_threads;  // 泊松网格化线程数
 
-  option_manager_.sift_extraction->use_gpu = options_.use_gpu;
-  option_manager_.sift_matching->use_gpu = options_.use_gpu;
+// 配置图像读取器选项
+ImageReaderOptions& reader_options = *option_manager_.image_reader;
+reader_options.database_path = *option_manager_.database_path;  // 数据库路径
+reader_options.image_path = *option_manager_.image_path;        // 图像路径
 
-  option_manager_.sift_extraction->gpu_index = options_.gpu_index;
-  option_manager_.sift_matching->gpu_index = options_.gpu_index;
-  option_manager_.patch_match_stereo->gpu_index = options_.gpu_index;
+// 如果提供了掩码路径，则配置掩码相关选项
+if (!options_.mask_path.empty()) {
+  reader_options.mask_path = options_.mask_path;                      // 图像读取器掩码路径
+  option_manager_.image_reader->mask_path = options_.mask_path;       // 图像读取器掩码路径
+  option_manager_.stereo_fusion->mask_path = options_.mask_path;      // 立体融合掩码路径
+}
 
-  feature_extractor_ = std::make_unique<SiftFeatureExtractor>(
-      reader_options, *option_manager_.sift_extraction);
+reader_options.single_camera = options_.single_camera;  // 是否使用单一相机模型
+reader_options.camera_model = options_.camera_model;    // 相机模型类型
 
-  exhaustive_matcher_ = std::make_unique<ExhaustiveFeatureMatcher>(
-      *option_manager_.exhaustive_matching, *option_manager_.sift_matching,
+// 配置GPU使用选项
+option_manager_.sift_extraction->use_gpu = options_.use_gpu;  // SIFT特征提取是否使用GPU
+option_manager_.sift_matching->use_gpu = options_.use_gpu;    // SIFT特征匹配是否使用GPU
+
+// 配置GPU设备索引
+option_manager_.sift_extraction->gpu_index = options_.gpu_index;     // SIFT特征提取GPU索引
+option_manager_.sift_matching->gpu_index = options_.gpu_index;       // SIFT特征匹配GPU索引
+option_manager_.patch_match_stereo->gpu_index = options_.gpu_index;  // 块匹配立体GPU索引
+
+// 创建SIFT特征提取器实例
+feature_extractor_ = std::make_unique<SiftFeatureExtractor>(
+    reader_options, *option_manager_.sift_extraction);
+
+// 创建穷举特征匹配器实例（适用于小规模图像集）
+exhaustive_matcher_ = std::make_unique<ExhaustiveFeatureMatcher>(
+    *option_manager_.exhaustive_matching, *option_manager_.sift_matching,
+    *option_manager_.database_path);
+
+// 如果提供了词汇树路径，则启用循环检测功能
+if (!options_.vocab_tree_path.empty()) {
+  option_manager_.sequential_matching->loop_detection = true;        // 启用循环检测
+  option_manager_.sequential_matching->vocab_tree_path =             // 设置词汇树路径
+      options_.vocab_tree_path;
+}
+
+// 创建序列特征匹配器实例（适用于视频或有序图像）
+sequential_matcher_ = std::make_unique<SequentialFeatureMatcher>(
+    *option_manager_.sequential_matching, *option_manager_.sift_matching,
+    *option_manager_.database_path);
+
+// 如果提供了词汇树路径，则创建基于词汇树的特征匹配器
+if (!options_.vocab_tree_path.empty()) {
+  option_manager_.vocab_tree_matching->vocab_tree_path =  // 设置词汇树路径
+      options_.vocab_tree_path;
+  // 创建词汇树特征匹配器实例（适用于大规模图像集）
+  vocab_tree_matcher_ = std::make_unique<VocabTreeFeatureMatcher>(
+      *option_manager_.vocab_tree_matching, *option_manager_.sift_matching,
       *option_manager_.database_path);
-
-  if (!options_.vocab_tree_path.empty()) {
-    option_manager_.sequential_matching->loop_detection = true;
-    option_manager_.sequential_matching->vocab_tree_path =
-        options_.vocab_tree_path;
-  }
-
-  sequential_matcher_ = std::make_unique<SequentialFeatureMatcher>(
-      *option_manager_.sequential_matching, *option_manager_.sift_matching,
-      *option_manager_.database_path);
-
-  if (!options_.vocab_tree_path.empty()) {
-    option_manager_.vocab_tree_matching->vocab_tree_path =
-        options_.vocab_tree_path;
-    vocab_tree_matcher_ = std::make_unique<VocabTreeFeatureMatcher>(
-        *option_manager_.vocab_tree_matching, *option_manager_.sift_matching,
-        *option_manager_.database_path);
-  }
+}
 }
 
 void AutomaticReconstructionController::Stop() {
