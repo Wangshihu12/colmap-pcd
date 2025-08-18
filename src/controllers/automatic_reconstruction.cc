@@ -200,32 +200,60 @@ void AutomaticReconstructionController::RunFeatureMatching() {
   active_thread_ = nullptr;
 }
 
+/**
+ * [功能描述]：运行稀疏映射器进行稀疏重建（SfM），这是3D重建流程中的核心步骤
+ * 该函数会先检查是否已存在稀疏重建结果，如果存在则直接加载，否则执行新的稀疏重建
+ * @return 无返回值
+ */
 void AutomaticReconstructionController::RunSparseMapper() {
+  // 构建稀疏重建结果的存储路径
   const auto sparse_path = JoinPaths(options_.workspace_path, "sparse");
+  
+  // 检查稀疏重建目录是否已存在
   if (ExistsDir(sparse_path)) {
+    // 获取sparse目录下的所有子目录列表
     auto dir_list = GetDirList(sparse_path);
+    // 对目录列表进行排序，确保按顺序处理
     std::sort(dir_list.begin(), dir_list.end());
+    
+    // 如果存在子目录，说明已有稀疏重建结果
     if (dir_list.size() > 0) {
+      // 输出警告信息，告知用户跳过稀疏重建
       std::cout << std::endl
                 << "WARNING: Skipping sparse reconstruction because it is "
                    "already computed"
                 << std::endl;
+      
+      // 遍历所有重建结果目录，加载已有的稀疏重建数据
       for (const auto& dir : dir_list) {
         reconstruction_manager_->Read(dir);
       }
-      return;
+      return; // 直接返回，跳过后续的重建过程
     }
   }
 
+  // 创建增量映射器控制器，用于执行稀疏重建
+  // 传入映射器配置、图像路径、数据库路径和重建管理器
   IncrementalMapperController mapper(
       option_manager_.mapper.get(), *option_manager_.image_path,
       *option_manager_.database_path, reconstruction_manager_);
+  
+  // 设置当前活动线程为映射器（用于线程管理和停止控制）
   active_thread_ = &mapper;
+  
+  // 启动增量映射器，开始稀疏重建过程
   mapper.Start();
+  
+  // 等待映射器完成工作
   mapper.Wait();
+  
+  // 清除活动线程引用
   active_thread_ = nullptr;
 
+  // 确保sparse输出目录存在
   CreateDirIfNotExists(sparse_path);
+  
+  // 将重建结果写入到sparse目录中
   reconstruction_manager_->Write(sparse_path, &option_manager_);
 }
 
