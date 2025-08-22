@@ -950,20 +950,16 @@ bool IncrementalMapperController::LoadPose() {
 
         }
 
-        double t_x = -static_cast<double>(pose[1]);
-        double t_y = -static_cast<double>(pose[2]);
-        double t_z = static_cast<double>(pose[0]);
-        double roll = static_cast<double>(pose[3]);
-        double pitch = -static_cast<double>(pose[4]);
-        double yaw = -static_cast<double>(pose[5]);
+        double t_x = static_cast<double>(pose[0]);
+        double t_y = static_cast<double>(pose[1]);
+        double t_z = static_cast<double>(pose[2]);
+        double qw = static_cast<double>(pose[3]);
+        double qx = static_cast<double>(pose[4]);
+        double qy = static_cast<double>(pose[5]);
+        double qz = static_cast<double>(pose[6]);
 
-        Eigen::AngleAxisd rollAngle(Eigen::AngleAxisd(roll,Eigen::Vector3d::UnitZ()));
-        Eigen::AngleAxisd pitchAngle(Eigen::AngleAxisd(pitch,Eigen::Vector3d::UnitX()));
-        Eigen::AngleAxisd yawAngle(Eigen::AngleAxisd(yaw,Eigen::Vector3d::UnitY()));
-      
-        Eigen::Matrix3d rotation_matrix;
-        rotation_matrix = yawAngle * pitchAngle * rollAngle;
-        Eigen::Matrix3d R_wc = rotation_matrix;
+        Eigen::Quaterniond q_wc(qw, qx, qy, qz);
+        Eigen::Matrix3d R_wc = q_wc.toRotationMatrix();
 
         Eigen::Vector3d t_wc;
         t_wc << t_x, t_y, t_z;
@@ -993,6 +989,167 @@ bool IncrementalMapperController::LoadPose() {
   << std::endl;
   return true;
 
+}
+
+/**
+ * [功能描述]：从txt文件读取图像位姿先验信息，支持新的数据格式
+ * @return bool 加载是否成功，成功返回true，失败返回false
+ */
+bool IncrementalMapperController::LoadColmapPose() {
+
+  // 创建文件输入流，用于读取位姿文件
+  std::ifstream read_pose;
+  read_pose.open(options_->image_pose_prior_path, std::ios::in);
+  
+  // 检查文件是否成功打开
+  if (read_pose.is_open()){
+    std::string str;                    // 存储每行读取的字符串
+    bool end_header_show = false;       // 标记是否已读取完文件头
+    image_t image_id = 0;              // 图像ID计数器
+    bool skip_next_line = false;       // 标记是否跳过下一行（用于跳过0.0 0.0 -1行）
+    
+    // 逐行读取文件内容
+    while (getline(read_pose, str)){
+      if (end_header_show){  // 如果已读取完文件头，开始处理位姿数据
+        
+        // 如果标记为跳过下一行，则跳过当前行
+        if (skip_next_line) {
+          skip_next_line = false;
+          continue;
+        }
+
+        image_id += 1;       // 图像ID递增
+        
+        // 检查数据中是否包含NaN值
+        bool exist_nan = false;
+        std::stringstream ss(str);      // 用于解析数值的字符串流
+        std::string s;
+        
+        // 检查每行是否包含"nan"字符串
+        while (ss >> s) {
+          if (s == "nan") {
+            exist_nan = true;
+            break;
+          }
+        }
+        
+        // 如果存在NaN值，跳过该行数据
+        if (exist_nan) {
+          skip_next_line = true;  // 标记跳过下一行
+          continue;
+        }
+        
+        // 重置字符串流用于解析数值
+        ss.clear();
+        ss.str(str);
+        
+        // 解析空格分隔的数据：IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME
+        double qw, qx, qy, qz, tx, ty, tz;
+        int camera_id;
+        std::string name;
+        
+        // 按顺序读取各个数值和字符串
+        int id;
+        if (ss >> id >> qw >> qx >> qy >> qz >> tx >> ty >> tz >> camera_id >> name) {
+          // 输入数据格式：[qw, qx, qy, qz, tx, ty, tz] 表示 t_CW (相机到世界)
+          
+          // 步骤1：直接使用输入的四元数和平移向量
+          Eigen::Quaterniond q_cw(qw, qx, qy, qz);
+          Eigen::Vector3d t_cw(tx, ty, tz);
+          
+          // 步骤2：计算世界到相机的变换
+          Eigen::Matrix3d R_cw = q_cw.toRotationMatrix();
+          Eigen::Matrix3d R_wc = R_cw.transpose();
+          Eigen::Vector3d t_wc = -R_wc * t_cw;
+          
+          // 步骤3：将R_wc转换为欧拉角 (ZYX顺序)
+          double roll, pitch, yaw;
+          // R = Rz(roll) * Ry(pitch) * Rx(yaw)
+          pitch = asin(-R_wc(2,0));
+          
+          if (abs(pitch - M_PI/2) < 1e-6) {
+              // 万向锁情况处理
+              roll = atan2(R_wc(0,1), R_wc(1,1));
+              yaw = 0.0;
+          } else if (abs(pitch + M_PI/2) < 1e-6) {
+              roll = atan2(-R_wc(0,1), -R_wc(1,1));
+              yaw = 0.0;
+          } else {
+              roll = atan2(R_wc(2,1), R_wc(2,2));
+              yaw = atan2(R_wc(1,0), R_wc(0,0));
+          }
+          
+          // 步骤4：调整坐标系
+          // 平移调整：交换轴并取反
+          double t_x = -t_wc.y();  // Y -> -X
+          double t_y = -t_wc.z();  // Z -> -Y
+          double t_z = t_wc.x();   // X -> Z
+          
+          // 欧拉角调整
+          double roll_adj = roll;
+          double pitch_adj = -pitch;
+          double yaw_adj = -yaw;
+
+          // 处理万向锁情况：当俯仰角超出±90°范围时进行调整
+          if (pitch_adj < -M_PI / 2 || pitch_adj > M_PI / 2) {
+            roll_adj += M_PI;      // 横滚角增加180°
+            pitch_adj = M_PI - pitch_adj;  // 俯仰角调整
+            yaw_adj += M_PI;       // 偏航角增加180°
+          }
+
+          // 将角度限制在[-π, π]范围内
+          if (roll_adj < -M_PI) roll_adj += 2 * M_PI;        // 横滚角范围调整
+          else if (roll_adj > M_PI) roll_adj -= 2 * M_PI;
+          if (pitch_adj < -M_PI) pitch_adj += 2 * M_PI;      // 俯仰角范围调整
+          else if (pitch_adj > M_PI) pitch_adj -= 2 * M_PI;
+          if (yaw_adj < -M_PI) yaw_adj += 2 * M_PI;          // 偏航角范围调整
+          else if (yaw_adj > M_PI) yaw_adj -= 2 * M_PI;
+          
+          // 步骤5：使用正确的顺序重建旋转矩阵
+          // 注意：使用ZYX顺序（与提取时一致）
+          Eigen::Matrix3d R_wc_adj;
+          R_wc_adj = Eigen::AngleAxisd(roll_adj, Eigen::Vector3d::UnitZ()) *
+                    Eigen::AngleAxisd(pitch_adj, Eigen::Vector3d::UnitY()) *
+                    Eigen::AngleAxisd(yaw_adj, Eigen::Vector3d::UnitX());
+          
+          // 步骤6：转换回相机到世界的变换
+          Eigen::Matrix3d R_cw_adj = R_wc_adj.transpose();
+          Eigen::Vector3d t_cw_adj = -R_cw_adj * Eigen::Vector3d(t_x, t_y, t_z);
+          
+          // 步骤7：转换为四元数
+          Eigen::Quaterniond q_cw_adj(R_cw_adj);
+          
+          // 构建最终的位姿格式
+          std::vector<double> trans_pose {
+              t_cw_adj.x(), t_cw_adj.y(), t_cw_adj.z(),
+              q_cw_adj.w(), q_cw_adj.x(), q_cw_adj.y(), q_cw_adj.z()
+          };
+      
+          image_poses_.emplace(image_id, trans_pose);
+          skip_next_line = true;
+        }
+        
+      } else {  // 处理文件头部分
+        // 检查是否到达文件头结束标记
+        if (str == "end_header"){
+          end_header_show = true;  // 标记文件头读取完成
+        }
+      }
+    }
+  } else{  // 文件打开失败
+    std::cout << "[增量重建] 相机位姿文件打开失败!" << std::endl;
+    return false;
+  }
+
+  // 关闭文件
+  read_pose.close();
+  
+  // 输出读取成功的位姿数量信息
+  std::cout<<"读取到 " << image_poses_.size() << " 个位姿"<<std::endl
+  << options_->image_pose_prior_path << std::endl
+  << std::endl;
+  
+  return true;  // 加载成功，返回true
 }
 
 

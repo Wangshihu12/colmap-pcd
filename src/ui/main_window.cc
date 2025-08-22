@@ -1075,11 +1075,18 @@ void MainWindow::LoadLidarPoint(){
   }
 }
 
+/**
+ * [功能描述]：保存图像位姿到PLY格式文件
+ * 该函数将重建结果中的相机位姿转换为指定坐标系格式并保存为PLY文件
+ */
 void MainWindow::SaveImagePoses(){
+  // 检查映射器控制器状态和选项配置是否有效
   if (!mapper_controller_->IsStarted() && !options_.Check()) {
-    ShowInvalidProjectError();
+    ShowInvalidProjectError();  // 显示无效项目错误
     return;
   }
+  
+  // 检查映射器是否已启动或完成，并验证是否有有效的重建结果
   if (mapper_controller_->IsStarted() || mapper_controller_->IsFinished()) {
     if (!HasSelectedReconstruction()) {
       std::cout << "No useful reconstruction result" << std::endl;
@@ -1087,98 +1094,128 @@ void MainWindow::SaveImagePoses(){
     }
   }
 
+  // 检查位姿保存路径是否已定义
   if (options_.mapper->image_pose_save_folder == ""){
     std::cout << "Pose file path undefined" << std::endl;
   }
 
+  // 获取当前选中的重建结果
   const Reconstruction& reconstruction =
     reconstruction_manager_.Get(SelectedReconstructionIdx());
+  
+  // 构建位姿文件的完整路径（PLY格式）
   std::string traj_path = options_.mapper->image_pose_save_folder + "/"+"pose.ply";
+  
+  // 创建输出文件流
   std::ofstream traj_writeout;
   traj_writeout.open(traj_path, std::ios::out);
+  
+  // 检查文件是否成功打开
   if (!traj_writeout){
     std::cout << "Write out traj fail" << std::endl;
     return;
   }
 
+  // 注释掉的代码：其他获取图像数量的方式
   // int image_num = mapper_controller_->database_cache_.NumImages();
   // std::vector<std::string> image_list = (options_.image_reader)->image_list;
   // int image_num = image_list.size();
-
   // std::unique_ptr<IncrementalMapperController> mapper_controller_
+  
+  // 获取原始图像总数
   int image_num = mapper_controller_ -> OriginImagesNum();
   // database_management_widget_-> NumImages();
 
-  traj_writeout << "ply" << std::endl
-                << "format ascii 1.0" << std::endl
-                << "element vertex " << image_num << std::endl
-                << "property float x" << std::endl
-                << "property float y" << std::endl
-                << "property float z" << std::endl
-                << "property float roll" << std::endl
-                << "property float pitch" << std::endl
-                << "property float yaw" << std::endl
-                << "end_header" << std::endl;
+  // 写入PLY文件头信息
+  traj_writeout << "ply" << std::endl                           // PLY文件格式标识
+                << "format ascii 1.0" << std::endl              // ASCII格式，版本1.0
+                << "element vertex " << image_num << std::endl  // 顶点元素数量（图像数量）
+                << "property float x" << std::endl              // X坐标属性
+                << "property float y" << std::endl              // Y坐标属性
+                << "property float z" << std::endl              // Z坐标属性
+                << "property float roll" << std::endl           // 横滚角属性
+                << "property float pitch" << std::endl          // 俯仰角属性
+                << "property float yaw" << std::endl            // 偏航角属性
+                << "end_header" << std::endl;                   // 文件头结束标识
   
+  // 获取重建结果中的所有图像信息
   const EIGEN_STL_UMAP(image_t, class Image) images = reconstruction.Images();
+  
+  // 遍历所有图像ID（从1开始）
   for (int i = 1; i <= image_num; i++){
     image_t image_id = i;
-    auto iter = images.find(image_id);
+    auto iter = images.find(image_id);  // 查找当前图像ID对应的图像信息
+    
+    // 如果图像未在重建结果中找到，写入NaN值
     if (iter == images.end()) {
-      traj_writeout << "nan" << " "
-                    << "nan" << " "
-                    << "nan" << " "
-                    << "nan" << " "
-                    << "nan" << " "
-                    << "nan" << std::endl;
+      traj_writeout << "nan" << " "      // X坐标为NaN
+                    << "nan" << " "      // Y坐标为NaN
+                    << "nan" << " "      // Z坐标为NaN
+                    << "nan" << " "      // roll角为NaN
+                    << "nan" << " "      // pitch角为NaN
+                    << "nan" << std::endl;  // yaw角为NaN
     } else {
+      // 找到图像，提取位姿信息
       Image image = iter->second;
-      const Eigen::Vector3d t_cw =  image.Tvec();
-      const Eigen::Vector4d q_cw =  image.Qvec();
+      
+      // 获取相机到世界坐标系的变换参数 (t_CW, q_CW)
+      const Eigen::Vector3d t_cw =  image.Tvec();  // 平移向量：相机到世界
+      const Eigen::Vector4d q_cw =  image.Qvec();  // 四元数：相机到世界 [qw, qx, qy, qz]
 
-      Eigen::Quaterniond quaternion(q_cw(0), q_cw(1),q_cw(2), q_cw(3));
-      Eigen::Matrix3d R_cw = quaternion.matrix();
+      // 构建四元数对象并转换为旋转矩阵
+      Eigen::Quaterniond quaternion(q_cw(0), q_cw(1), q_cw(2), q_cw(3));
+      Eigen::Matrix3d R_cw = quaternion.matrix();  // 相机到世界的旋转矩阵
 
-      Eigen::Matrix3d R_wc = R_cw.transpose();
-      Eigen::Vector3d t_wc = - R_wc * t_cw;
-      // eular angle is radian[rad]
+      // 计算世界到相机坐标系的变换 (t_WC, R_WC)
+      Eigen::Matrix3d R_wc = R_cw.transpose();     // 世界到相机的旋转矩阵
+      Eigen::Vector3d t_wc = - R_wc * t_cw;        // 世界到相机的平移向量
+      
+      // 从旋转矩阵提取欧拉角（弧度制）
+      // 使用YXZ顺序：先绕Y轴旋转，再绕X轴旋转，最后绕Z轴旋转
       Eigen::Vector3d euler_angle = R_wc.eulerAngles(1,0,2);
-      double roll = euler_angle(2);
-      double pitch = -euler_angle(1);
-      double yaw = -euler_angle(0);
+      double roll = euler_angle(2);   // 横滚角（绕Z轴旋转）
+      double pitch = -euler_angle(1); // 俯仰角（绕X轴旋转，取负值）
+      double yaw = -euler_angle(0);   // 偏航角（绕Y轴旋转，取负值）
 
+      // 处理万向锁情况：当俯仰角超出±90°范围时进行调整
       if (pitch < -M_PI / 2 || pitch > M_PI / 2) {
-        roll += M_PI;
-        pitch = M_PI - pitch;
-        yaw += M_PI;
+        roll += M_PI;      // 横滚角增加180°
+        pitch = M_PI - pitch;  // 俯仰角调整
+        yaw += M_PI;       // 偏航角增加180°
       }
 
-      if (roll < -M_PI) roll += 2 * M_PI;
+      // 将角度限制在[-π, π]范围内
+      if (roll < -M_PI) roll += 2 * M_PI;        // 横滚角范围调整
       else if (roll > M_PI) roll -= 2 * M_PI;
-      if (pitch < -M_PI) pitch += 2 * M_PI;
+      if (pitch < -M_PI) pitch += 2 * M_PI;      // 俯仰角范围调整
       else if (pitch > M_PI) pitch -= 2 * M_PI;
-      if (yaw < -M_PI) yaw += 2 * M_PI;
+      if (yaw < -M_PI) yaw += 2 * M_PI;          // 偏航角范围调整
       else if (yaw > M_PI) yaw -= 2 * M_PI;
 
-      double tx = t_wc(2);
-      double ty = -t_wc(0);
-      double tz = -t_wc(1);
-      traj_writeout << static_cast<float>(tx) << " "
-                    << static_cast<float>(ty) << " "
-                    << static_cast<float>(tz) << " "
-                    << static_cast<float>(roll) << " "
-                    << static_cast<float>(pitch) << " "
-                    << static_cast<float>(yaw) << std::endl;
+      // 坐标系转换：视觉坐标系 -> 目标坐标系
+      // 将世界到相机的平移向量转换为目标坐标系格式
+      double tx = t_wc(2);   // 视觉Z轴 -> 目标X轴（前进方向）
+      double ty = -t_wc(0);  // 视觉X轴 -> -目标Y轴（左右方向翻转）
+      double tz = -t_wc(1);  // 视觉Y轴 -> -目标Z轴（上下方向翻转）
+      
+      // 将位姿信息写入文件（转换为float类型以节省空间）
+      traj_writeout << static_cast<float>(tx) << " "      // X坐标
+                    << static_cast<float>(ty) << " "      // Y坐标
+                    << static_cast<float>(tz) << " "      // Z坐标
+                    << static_cast<float>(roll) << " "    // 横滚角
+                    << static_cast<float>(pitch) << " "   // 俯仰角
+                    << static_cast<float>(yaw) << std::endl;  // 偏航角
     }
   }
   
+  // 关闭文件流
   traj_writeout.close();
 
+  // 输出保存成功信息
   std::cout << std::endl;
   std::cout << "Pose file saved to "<< std::endl
             << traj_path <<std::endl;
   std::cout << std::endl;
-
 }
 
 void MainWindow::Render() {

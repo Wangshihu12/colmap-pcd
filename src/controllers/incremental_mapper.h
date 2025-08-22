@@ -61,35 +61,35 @@ struct IncrementalMapperOptions {
   // If show correspondence of image feature points to lidar points on ui
   bool if_add_lidar_display = true;
   // Search radius in kdtree
-  double kdtree_max_search_range = 1.5;
-  double kdtree_min_search_range = 0.2;
-  double search_range_drop_speed = 0.1;
-  // Sphere radius in global bundle adjustment
+  double kdtree_max_search_range = 0.5; // KD树最大搜索半径(米)
+  double kdtree_min_search_range = 0.1; // KD树最小搜索半径(米)
+  double search_range_drop_speed = 0.1; // 搜索半径下降速度
+  // 全局BA中的球形搜索半径(米)
   double ba_spherical_search_radius = 40;
   // Register a new image, 
   // lidar point cloud proj to this image 
   // and images that have enough feature matches to this image
   int ba_match_features_threshold = 200;
-  // Optimal weight for proj lidar point
+  // 投影激光雷达点约束权重
   double proj_lidar_constraint_weight = 10.0;
-  // Optimal weight for Icp lidar point
+  // ICP激光雷达点约束权重
   double icp_lidar_constraint_weight = 1000.0;
-  // Optimal weight for Icp ground lidar point
+  // ICP地面激光雷达点约束权重
   double icp_ground_lidar_constraint_weight = 10000.0;
-  // Max error after proj optimization
+  // 投影优化后的最大距离误差(米)
   double proj_max_dist_error = 10;
-  // Max error after icp optimization
+  // ICP优化后的最大距离误差(米)
   double icp_max_dist_error = 2;
   // Origin image size * depth_image_scale = depth image size
-  double depth_image_scale = 0.2;
+  double depth_image_scale = 0.2; // 深度图像缩放比例
   // Projection scale
-  int max_proj_scale = 10;
-  int min_proj_scale = 2;
-  double min_proj_dist = 2;
+  int max_proj_scale = 10; // 最大投影尺度
+  int min_proj_scale = 2; // 最小投影尺度
+  double min_proj_dist = 2; // 最小投影距离(米)
   // Depth of the projection pyramid
-  double choose_meter = 40.0;
+  double choose_meter = 40.0; // 投影金字塔深度(米)
   // If a lidar point is too close to the image, not proj
-  double min_lidar_proj_dist = 0.5;
+  double min_lidar_proj_dist = 0.5; // 激光雷达点最小投影距离(米)
   // If save proj image
   bool if_save_depth_image = false;
   // Images folder
@@ -100,9 +100,9 @@ struct IncrementalMapperOptions {
   bool if_save_lidar_frame = false;
   std::string lidar_frame_folder;
   // Size of the submap for cutting the lidar map
-  double submap_length = 1.0;
-  double submap_width = 1.0;
-  double submap_height = 1.0;
+  double submap_length = 0.5;
+  double submap_width = 0.5;
+  double submap_height = 0.5;
  
   // The minimum number of matches for inlier matches to be considered.
   int min_num_matches = 15;
@@ -162,13 +162,13 @@ struct IncrementalMapperOptions {
   int ba_min_num_residuals_for_multi_threading = 50000;
 
   // The number of images to optimize in local bundle adjustment.
-  int ba_local_num_images = 6;
+  int ba_local_num_images = 6; // 局部BA中优化的图像数量
 
   // Ceres solver function tolerance for local bundle adjustment
-  double ba_local_function_tolerance = 0.0;
+  double ba_local_function_tolerance = 0.0; // 局部BA函数容差
 
   // The maximum number of local bundle adjustment iterations.
-  int ba_local_max_num_iterations = 25;
+  int ba_local_max_num_iterations = 25; // 局部BA最大迭代次数
 
   // Whether to use PBA in global bundle adjustment.
   bool ba_global_use_pba = false;
@@ -183,10 +183,10 @@ struct IncrementalMapperOptions {
   int ba_global_points_freq = 250000;
 
   // Ceres solver function tolerance for global bundle adjustment
-  double ba_global_function_tolerance = 0.0;
+  double ba_global_function_tolerance = 0.0; // 全局BA函数容差
 
   // The maximum number of global bundle adjustment iterations.
-  int ba_global_max_num_iterations = 50;
+  int ba_global_max_num_iterations = 50; // 全局BA最大迭代次数
 
   // The thresholds for iterative bundle adjustment refinements.
   int ba_local_max_refinements = 2;
@@ -252,6 +252,7 @@ class IncrementalMapperController : public Thread {
   void Run();
   bool LoadDatabase();
   bool LoadPose();
+  bool LoadColmapPose();
   void Reconstruct(const IncrementalMapper::Options& init_mapper_options);
 
   const IncrementalMapperOptions* options_;

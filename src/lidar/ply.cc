@@ -22,7 +22,8 @@ const bool PointCloudProcess::Initialize(const PcdProjectionOptions& pp_options)
         << path_ << std::endl;
     std::cout << std::endl;
     
-    global_pcd_ptr_ = PointCloudDirectionTrans(ptr);
+    // global_pcd_ptr_ = PointCloudDirectionTrans(ptr);
+    global_pcd_ptr_ = ptr;
     // Cut point cloud to nodes
     pcd_proj_->BuildSubMap(global_pcd_ptr_);
     kdtree_ptr_->BuildMap(global_pcd_ptr_);
@@ -70,7 +71,8 @@ bool PointCloudProcess::LoadDownsizedMap(double filter_size){
         << path_ << std::endl;
     std::cout << std::endl;
 
-    global_pcd_ptr_ = PointCloudDirectionTrans(ptr);
+    // global_pcd_ptr_ = PointCloudDirectionTrans(ptr);
+    global_pcd_ptr_ = ptr;
     
     // Point cloud down sample
     pcl::VoxelGrid<LidarPoint> voxel_scan;
