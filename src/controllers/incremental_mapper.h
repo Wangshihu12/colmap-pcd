@@ -73,7 +73,7 @@ struct IncrementalMapperOptions {
   // 投影激光雷达点约束权重
   double proj_lidar_constraint_weight = 10.0;
   // ICP激光雷达点约束权重
-  double icp_lidar_constraint_weight = 1000.0;
+  double icp_lidar_constraint_weight = 100.0;
   // ICP地面激光雷达点约束权重
   double icp_ground_lidar_constraint_weight = 10000.0;
   // 投影优化后的最大距离误差(米)

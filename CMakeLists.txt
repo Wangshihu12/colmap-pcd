@@ -114,6 +114,9 @@ find_package(Glog REQUIRED)
 
 find_package(SQLite3 REQUIRED)
 
+# 添加YAML-CPP支持
+find_package(yaml-cpp REQUIRED)
+
 set(OpenGL_GL_PREFERENCE GLVND)
 find_package(OpenGL REQUIRED)
 find_package(Glew REQUIRED)
@@ -382,6 +385,7 @@ set(COLMAP_EXTERNAL_LIBRARIES
     ${CERES_LIBRARIES}
     ${OPENGL_LIBRARIES}
     ${SQLite3_LIBRARIES}
+    yaml-cpp
 )
 
 if(OPENMP_FOUND)

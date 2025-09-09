@@ -143,7 +143,7 @@ SiftFeatureExtractor::SiftFeatureExtractor(
   // 根据SIFT参数和GPU可用性选择不同的特征提取方法
   // 当不需要域大小池化、不估计仿射形状且启用GPU时，使用GPU特征提取
   if (!sift_options_.domain_size_pooling &&
-      !sift_options_.estimate_affine_shape && sift_options_.use_gpu) {
+      !sift_options_.estimate_affine_shape) {
 
     // 解析GPU索引（可以是逗号分隔的多个索引）
     std::vector<int> gpu_indices = CSVToVector<int>(sift_options_.gpu_index);

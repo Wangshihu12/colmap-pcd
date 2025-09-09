@@ -686,7 +686,7 @@ void IncrementalMapperController::Reconstruct(
 
       // 根据是否使用激光雷达约束选择不同的初始化方法
       bool reg_init_success;
-      if (options_->if_add_lidar_constraint){
+      if (false){
         // 使用深度投影方法初始化
         reg_init_success = mapper.RegisterInitialImagePairByDepthProj(
           init_mapper_options, image_id1, image_id2);
@@ -765,6 +765,7 @@ void IncrementalMapperController::Reconstruct(
 
       // 如果没有更多图像可注册，结束增量式重建
       if (next_images.empty()) {
+        std::cout << "  => 没有更多的图像可注册." << std::endl;
         break;
       }
 
@@ -853,6 +854,7 @@ void IncrementalMapperController::Reconstruct(
       const size_t max_model_overlap =
           static_cast<size_t>(options_->max_model_overlap);
       if (mapper.NumSharedRegImages() >= max_model_overlap) {
+        std::cout << "  => 重叠图像数量过多，停止当前模型的重建." << std::endl;
         break;
       }
 
@@ -870,6 +872,7 @@ void IncrementalMapperController::Reconstruct(
 
     // 如果收到停止信号，结束当前重建但不丢弃结果
     if (IsStopped()) {
+      std::cout << "  => 收到停止信号，结束当前重建但不丢弃结果." << std::endl;
       const bool kDiscardReconstruction = false;
       mapper.EndReconstruction(kDiscardReconstruction);
       break;

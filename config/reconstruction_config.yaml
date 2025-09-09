@@ -1,0 +1,71 @@
+# 必需参数
+workspace_path: "/GOSLAM/Downloads/GOSLAM/RT_2025-09-08-17-37-18/Colmap"           # 工作空间路径：存储所有重建结果的文件夹路径
+image_path: "/GOSLAM/Downloads/GOSLAM/RT_2025-09-08-17-37-18/Colmap/images"                  # 图像路径：输入图像文件夹的路径
+lidar_pointcloud_path: "/GOSLAM/Downloads/GOSLAM/RT_2025-09-08-17-37-18/Colmap/plane_cloud.ply"
+
+# 可选参数
+mask_path: ""                                  # 掩码路径：图像掩码文件夹的路径（可选）
+vocab_tree_path: ""                            # 词汇树路径：用于特征匹配的词汇树文件路径（可选）
+
+# 重建参数
+data_type: "individual"                        # 数据类型：individual/video/internet
+quality: "high"                                # 重建质量：low/medium/high/extreme  
+camera_model: "PINHOLE"                         # 相机模型类型
+camera_params: "820.320170, 820.533700, 1303.435090, 646.694520"         # 相机参数：焦距、主点、径向畸变、切向畸变
+single_camera: true                           # 是否使用单一相机模式
+sparse: true                                   # 是否执行稀疏重建
+dense: false                                    # 是否执行稠密重建
+mesher: "poisson"                             # 网格化算法：poisson/delaunay
+
+# 性能参数  
+num_threads: -1                                # 线程数量（-1表示使用所有可用线程）
+use_gpu: false                                  # 是否使用GPU加速
+gpu_index: "-1"                                # GPU设备索引（-1表示使用所有GPU）
+
+# SIFT特征提取参数
+sift_extraction:
+  max_image_size: 3200
+  max_num_features: 8192
+  first_octave: -1
+  num_octaves: 4
+  octave_resolution: 3
+  peak_threshold: 0.02
+  edge_threshold: 10.0
+  estimate_affine_shape: false
+  max_num_orientations: 2
+  upright: false
+  domain_size_pooling: false
+
+# SIFT特征匹配参数
+sift_matching:
+  max_ratio: 0.8
+  max_distance: 0.7
+  cross_check: true
+  max_num_matches: 32768
+  max_error: 4.0
+  confidence: 0.999
+  min_num_trials: 100
+  max_num_trials: 10000
+  min_inlier_ratio: 0.25
+  min_num_inliers: 15
+  multiple_models: false
+  guided_matching: false
+  planar_scene: false
+
+# 映射器参数
+mapper:
+  min_track_length: 3
+  max_track_length: 20
+  min_focal_length_ratio: 0.1
+  max_focal_length_ratio: 10.0
+  max_extra_param: 1.0
+  min_num_matches: 15
+  init_min_num_inliers: 100
+  init_min_triangulation_angle: 16.0
+  init_max_reg_trials: 200
+  abs_pose_max_error: 12.0
+  abs_pose_min_num_inliers: 30
+  abs_pose_min_triangulation_angle: 16.0
+  filter_max_reproj_error: 4.0
+  filter_min_track_length: 3
+  filter_min_triangulation_angle: 1.5

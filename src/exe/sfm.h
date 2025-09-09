@@ -53,6 +53,8 @@ int RunPointFiltering(int argc, char** argv);
 int RunPointTriangulator(int argc, char** argv);
 int RunRigBundleAdjuster(int argc, char** argv);
 
+int RunReconstructorFromYaml(int argc, char** argv);
+
 }  // namespace colmap
 
 #endif  // COLMAP_SRC_EXE_SFM_H_

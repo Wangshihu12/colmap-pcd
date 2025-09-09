@@ -31,6 +31,8 @@
 
 #include "base/image_reader.h"
 
+#include <algorithm>
+
 #include "base/camera_models.h"
 #include "util/misc.h"
 
@@ -47,41 +49,99 @@ bool ImageReaderOptions::Check() const {
   return true;
 }
 
+/**
+ * [功能描述]：ImageReader类的构造函数，用于初始化图像读取器
+ * @param options：图像读取选项，包含图像路径、相机参数等配置信息
+ * @param database：数据库指针，用于存储和读取相机、图像等数据
+ */
 ImageReader::ImageReader(const ImageReaderOptions& options, Database* database)
     : options_(options), database_(database), image_index_(0) {
+  // 验证输入选项的有效性
   CHECK(options_.Check());
 
-  // Ensure trailing slash, so that we can build the correct image name.
+  // 确保路径末尾有斜杠，以便正确构建图像名称
+  // 将Windows风格的反斜杠替换为Unix风格的正斜杠
   options_.image_path =
       EnsureTrailingSlash(StringReplace(options_.image_path, "\\", "/"));
   options_.mask_path =
       EnsureTrailingSlash(StringReplace(options_.mask_path, "\\", "/"));
 
-  // Get a list of all files in the image path, sorted by image name.
+  // 获取图像路径下所有文件的列表，并按图像名称排序
   if (options_.image_list.empty()) {
+    // 如果图像列表为空，则递归获取图像路径下的所有文件
     options_.image_list = GetRecursiveFileList(options_.image_path);
-    std::sort(options_.image_list.begin(), options_.image_list.end());
+    // std::cout << "图像列表: " << options_.image_list.size() << std::endl;
+    // 对文件列表进行数字排序，确保处理顺序的一致性
+    // 使用自定义比较函数处理数字文件名（如00001.png, 00002.png等）
+    std::sort(options_.image_list.begin(), options_.image_list.end(),
+              [](const std::string& a, const std::string& b) {
+                // 提取文件名（不包含路径）
+                std::string name_a = GetPathBaseName(a);
+                std::string name_b = GetPathBaseName(b);
+                
+                // 尝试提取数字部分进行比较
+                std::string num_a, num_b;
+                std::string ext_a, ext_b;
+                SplitFileExtension(name_a, &num_a, &ext_a);
+                SplitFileExtension(name_b, &num_b, &ext_b);
+                
+                // 如果都是纯数字，按数值大小排序
+                if (std::all_of(num_a.begin(), num_a.end(), ::isdigit) &&
+                    std::all_of(num_b.begin(), num_b.end(), ::isdigit)) {
+                  return std::stoi(num_a) < std::stoi(num_b);
+                }
+                
+                // 否则按字典序排序
+                return name_a < name_b;
+              });
+            
+    // std::cout << "图像列表: " << options_.image_list.size() << std::endl;
+    // for (const auto& image_name : options_.image_list) {
+    //   std::cout << "图像名称: " << image_name << std::endl;
+    // }
   } else {
+    // 如果图像列表不为空，检查是否需要排序
     if (!std::is_sorted(options_.image_list.begin(),
                         options_.image_list.end())) {
-      std::sort(options_.image_list.begin(), options_.image_list.end());
+      // 使用相同的数字排序逻辑
+      std::sort(options_.image_list.begin(), options_.image_list.end(),
+                [](const std::string& a, const std::string& b) {
+                  std::string name_a = GetPathBaseName(a);
+                  std::string name_b = GetPathBaseName(b);
+                  
+                  std::string num_a, num_b;
+                  std::string ext_a, ext_b;
+                  SplitFileExtension(name_a, &num_a, &ext_a);
+                  SplitFileExtension(name_b, &num_b, &ext_b);
+                  
+                  if (std::all_of(num_a.begin(), num_a.end(), ::isdigit) &&
+                      std::all_of(num_b.begin(), num_b.end(), ::isdigit)) {
+                    return std::stoi(num_a) < std::stoi(num_b);
+                  }
+                  
+                  return name_a < name_b;
+                });
     }
 
+    // 为每个图像名称添加完整路径前缀
     for (auto& image_name : options_.image_list) {
       image_name = JoinPaths(options_.image_path, image_name);
     }
   }
 
+  // 处理相机参数设置
   if (static_cast<camera_t>(options_.existing_camera_id) != kInvalidCameraId) {
+    // 如果指定了现有相机ID，从数据库中读取该相机信息
     CHECK(database->ExistsCamera(options_.existing_camera_id));
     prev_camera_ = database->ReadCamera(options_.existing_camera_id);
   } else {
-    // Set the manually specified camera parameters.
-    prev_camera_.SetCameraId(kInvalidCameraId);
-    prev_camera_.SetModelIdFromName(options_.camera_model);
+    // 设置手动指定的相机参数
+    prev_camera_.SetCameraId(kInvalidCameraId);  // 设置无效相机ID作为初始值
+    prev_camera_.SetModelIdFromName(options_.camera_model);  // 根据相机模型名称设置模型ID
     if (!options_.camera_params.empty()) {
+      // 如果提供了相机参数字符串，解析并设置参数
       CHECK(prev_camera_.SetParamsFromString(options_.camera_params));
-      prev_camera_.SetPriorFocalLength(true);
+      prev_camera_.SetPriorFocalLength(true);  // 标记焦距为先验值
     }
   }
 }

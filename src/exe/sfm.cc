@@ -43,7 +43,394 @@
 #include "util/opengl_utils.h"
 #include "util/option_manager.h"
 
+#include "feature/sift.h"           // 包含SiftExtractionOptions和SiftMatchingOptions的完整定义
+#include "feature/extraction.h"     // 包含SiftFeatureExtractor的完整定义
+#include "feature/matching.h"       // 包含ExhaustiveFeatureMatcher的完整定义
+#include "controllers/incremental_mapper.h" // 包含IncrementalMapperController的完整定义
+
+#include <yaml-cpp/yaml.h>
+#include <fstream>
+
 namespace colmap {
+
+/**
+ * [功能描述]：验证相机参数的有效性
+ * @param camera_model：相机模型名称，如"PINHOLE"、"SIMPLE_PINHOLE"等
+ * @param params：相机参数字符串，以逗号分隔的数值
+ * @return bool：返回true表示参数有效，false表示参数无效
+ */
+bool VerifyCameraParams(const std::string& camera_model,
+                        const std::string& params) {
+  // 检查相机模型名称是否存在
+  if (!ExistsCameraModelWithName(camera_model)) {
+    std::cerr << "ERROR: Camera model does not exist" << std::endl;
+    return false;
+  }
+
+  // 将参数字符串转换为double类型的向量
+  const std::vector<double> camera_params = CSVToVector<double>(params);
+  // 根据相机模型名称获取对应的模型ID
+  const int camera_model_id = CameraModelNameToId(camera_model);
+
+  // 如果提供了相机参数，则验证参数的有效性
+  if (camera_params.size() > 0 &&
+      !CameraModelVerifyParams(camera_model_id, camera_params)) {
+    std::cerr << "错误: 无效的相机参数" << std::endl;
+    return false;
+  }
+  if (camera_params.size() == 0) {
+    std::cerr << "错误: 相机参数为空" << std::endl;
+    return false;
+  }
+  return true;  // 所有验证都通过，返回true
+}
+
+/**
+ * [功能描述]：验证SIFT GPU参数的有效性
+ * @param use_gpu：是否使用GPU加速SIFT特征提取/匹配
+ * @return bool：返回true表示可以使用GPU，false表示不能使用GPU
+ */
+bool VerifySiftGPUParams(const bool use_gpu) {
+  // 检查是否启用了CUDA或OpenGL支持
+  // 如果没有启用这些GPU支持，则不能使用SIFT GPU功能
+#if !defined(CUDA_ENABLED) && !defined(OPENGL_ENABLED)
+  if (use_gpu) {
+    std::cerr << "ERROR: Cannot use Sift GPU without CUDA or OpenGL support; "
+                 "set SiftExtraction.use_gpu or SiftMatching.use_gpu to false."
+              << std::endl;
+    return false;
+  }
+#endif
+  return true;  // 有GPU支持或不需要GPU，返回true
+}
+
+/**
+ * [功能描述]：从YAML配置文件运行完整的重建流程，包括特征提取、特征匹配和增量重建
+ * @param argc：命令行参数数量
+ * @param argv：命令行参数数组
+ * @return int：返回执行状态，EXIT_SUCCESS表示成功，EXIT_FAILURE表示失败
+ */
+int RunReconstructorFromYaml(int argc, char** argv)
+{
+  // 计时
+  Timer timer;
+  timer.Start();
+
+  // 构建配置文件路径：项目根目录下的config文件夹
+  std::string config_file = "/home/goslam/catkin_colmap-pcd/src/colmap-pcd/config/reconstruction_config.yaml";
+
+  // 检查配置文件是否存在
+  if (!ExistsFile(config_file)) {
+    std::cout << "配置文件不存在: " << config_file << std::endl;
+    return EXIT_FAILURE;
+  } else {
+    std::cout << "配置文件路径: " << config_file << std::endl;
+  }
+
+  // 加载YAML文件
+  YAML::Node config = YAML::LoadFile(config_file);
+  
+  // 创建选项管理器
+  OptionManager options;
+  options.AddAllOptions();
+  
+  // 从YAML读取基本路径配置
+  std::string workspace_path, image_path, database_path;
+  if (config["workspace_path"]) {
+    workspace_path = config["workspace_path"].as<std::string>();
+  } else {
+    std::cerr << "ERROR: 配置文件中缺少workspace_path参数" << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  if (config["image_path"]) {
+    image_path = config["image_path"].as<std::string>();
+  } else {
+    std::cerr << "ERROR: 配置文件中缺少image_path参数" << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // 设置数据库路径
+  database_path = JoinPaths(workspace_path, "database.db");
+  
+  // 设置基本路径
+  *options.database_path = database_path;
+  *options.image_path = image_path;
+
+  // TODO: 读取点云文件，读取相机先验位姿
+  if (config["lidar_pointcloud_path"]) {
+    std::string lidar_pointcloud_path = config["lidar_pointcloud_path"].as<std::string>();
+    if (!lidar_pointcloud_path.empty()) {
+      options.mapper->if_add_lidar_constraint = true;
+      options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
+    }
+  }
+
+  // 从YAML读取并设置其他参数
+  if (config["mask_path"]) {
+    std::string mask_path = config["mask_path"].as<std::string>();
+    if (!mask_path.empty()) {
+      options.image_reader->mask_path = mask_path;
+    }
+  }
+  
+  if (config["camera_model"]) {
+    options.image_reader->camera_model = config["camera_model"].as<std::string>();
+  }
+
+  if (config["camera_params"]) {
+    options.image_reader->camera_params = config["camera_params"].as<std::string>();
+  }
+  
+  if (config["single_camera"]) {
+    options.image_reader->single_camera = config["single_camera"].as<bool>();
+  }
+  
+  if (config["use_gpu"]) {
+    bool use_gpu = config["use_gpu"].as<bool>();
+    options.sift_extraction->use_gpu = use_gpu;
+    options.sift_matching->use_gpu = use_gpu;
+  }
+  
+  // if (config["num_threads"]) {
+  //   int num_threads = config["num_threads"].as<int>();
+  //   options.sift_extraction->num_threads = num_threads;
+  //   options.sift_matching->num_threads = num_threads;
+  //   options.mapper->num_threads = num_threads;
+  // }
+  
+  // if (config["gpu_index"]) {
+  //   std::string gpu_index = config["gpu_index"].as<std::string>();
+  //   options.sift_extraction->gpu_index = gpu_index;
+  //   options.sift_matching->gpu_index = gpu_index;
+  // }
+  
+  // // 根据数据类型和质量调整配置
+  // if (config["data_type"]) {
+  //   std::string data_type = config["data_type"].as<std::string>();
+  //   StringToLower(&data_type);
+  //   if (data_type == "video") {
+  //     options.ModifyForVideoData();
+  //   } else if (data_type == "individual") {
+  //     options.ModifyForIndividualData();
+  //   } else if (data_type == "internet") {
+  //     options.ModifyForInternetData();
+  //   }
+  // }
+  
+  // if (config["quality"]) {
+  //   std::string quality = config["quality"].as<std::string>();
+  //   StringToLower(&quality);
+  //   if (quality == "low") {
+  //     options.ModifyForLowQuality();
+  //   } else if (quality == "medium") {
+  //     options.ModifyForMediumQuality();
+  //   } else if (quality == "high") {
+  //     options.ModifyForHighQuality();
+  //   } else if (quality == "extreme") {
+  //     options.ModifyForExtremeQuality();
+  //   }
+  // }
+
+  // // SIFT特征提取参数
+  // options.sift_extraction->max_image_size = config["sift_extraction"]["max_image_size"].as<int>();
+  // options.sift_extraction->max_num_features = config["sift_extraction"]["max_num_features"].as<int>();
+  // options.sift_extraction->first_octave = config["sift_extraction"]["first_octave"].as<int>();
+  // options.sift_extraction->num_octaves = config["sift_extraction"]["num_octaves"].as<int>();
+  // options.sift_extraction->octave_resolution = config["sift_extraction"]["octave_resolution"].as<int>();
+  // options.sift_extraction->peak_threshold = config["sift_extraction"]["peak_threshold"].as<double>();
+  // options.sift_extraction->edge_threshold = config["sift_extraction"]["edge_threshold"].as<double>();
+  // options.sift_extraction->estimate_affine_shape = config["sift_extraction"]["estimate_affine_shape"].as<bool>();
+  // options.sift_extraction->max_num_orientations = config["sift_extraction"]["max_num_orientations"].as<int>();
+  // options.sift_extraction->upright = config["sift_extraction"]["upright"].as<bool>();
+  // options.sift_extraction->domain_size_pooling = config["sift_extraction"]["domain_size_pooling"].as<bool>();
+
+  // // SIFT特征匹配参数
+  // options.sift_matching->max_ratio = config["sift_matching"]["max_ratio"].as<double>();
+  // options.sift_matching->max_distance = config["sift_matching"]["max_distance"].as<double>();
+  // options.sift_matching->cross_check = config["sift_matching"]["cross_check"].as<bool>();
+  // options.sift_matching->max_num_matches = config["sift_matching"]["max_num_matches"].as<int>();
+  // options.sift_matching->max_error = config["sift_matching"]["max_error"].as<double>();
+  // options.sift_matching->confidence = config["sift_matching"]["confidence"].as<double>();
+  // options.sift_matching->min_num_trials = config["sift_matching"]["min_num_trials"].as<int>();
+  // options.sift_matching->max_num_trials = config["sift_matching"]["max_num_trials"].as<int>();
+  // options.sift_matching->min_inlier_ratio = config["sift_matching"]["min_inlier_ratio"].as<double>();
+  // options.sift_matching->min_num_inliers = config["sift_matching"]["min_num_inliers"].as<int>();
+  // options.sift_matching->multiple_models = config["sift_matching"]["multiple_models"].as<bool>();
+  // options.sift_matching->guided_matching = config["sift_matching"]["guided_matching"].as<bool>();
+  // options.sift_matching->planar_scene = config["sift_matching"]["planar_scene"].as<bool>();
+
+  // 映射器参数
+  // options.mapper->min_track_length = config["mapper"]["min_track_length"].as<int>();
+  // options.mapper->max_track_length = config["mapper"]["max_track_length"].as<int>();
+  // options.mapper->min_focal_length_ratio = config["mapper"]["min_focal_length_ratio"].as<double>();
+  // options.mapper->max_focal_length_ratio = config["mapper"]["max_focal_length_ratio"].as<double>();
+  // options.mapper->max_extra_param = config["mapper"]["max_extra_param"].as<double>();
+  // options.mapper->min_num_matches = config["mapper"]["min_num_matches"].as<int>();
+  // options.mapper->init_min_num_inliers = config["mapper"]["init_min_num_inliers"].as<int>();
+  // options.mapper->init_min_triangulation_angle = config["mapper"]["init_min_triangulation_angle"].as<double>();
+  // options.mapper->init_max_reg_trials = config["mapper"]["init_max_reg_trials"].as<int>();
+  // options.mapper->abs_pose_max_error = config["mapper"]["abs_pose_max_error"].as<double>();
+  // options.mapper->abs_pose_min_num_inliers = config["mapper"]["abs_pose_min_num_inliers"].as<int>();
+  // options.mapper->abs_pose_min_triangulation_angle = config["mapper"]["abs_pose_min_triangulation_angle"].as<double>();
+  // options.mapper->filter_max_reproj_error = config["mapper"]["filter_max_reproj_error"].as<double>();
+  // options.mapper->filter_min_track_length = config["mapper"]["filter_min_track_length"].as<int>();
+  // options.mapper->filter_min_triangulation_angle = config["mapper"]["filter_min_triangulation_angle"].as<double>();
+
+  // 验证配置
+  if (!options.Check()) {
+    std::cerr << "ERROR: 配置验证失败" << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // 检查工作空间和图像目录
+  if (!ExistsDir(workspace_path)) {
+    std::cout << "工作空间目录不存在，正在创建: " << workspace_path << std::endl;
+    CreateDirIfNotExists(workspace_path);
+  }
+  
+  if (!ExistsDir(image_path)) {
+    std::cerr << "ERROR: 图像目录不存在: " << image_path << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  std::cout << "=== 开始执行重建流程 ===" << std::endl;
+  
+  // 第一步：特征提取
+  std::cout << "步骤1: 特征提取..." << std::endl;
+  {
+    // 配置图像读取器选项
+    ImageReaderOptions reader_options = *options.image_reader;
+    reader_options.database_path = database_path;
+    reader_options.image_path = image_path;
+
+    std::string descriptor_normalization = "l1_root";
+    options.sift_extraction->normalization = SiftExtractionOptions::Normalization::L1_ROOT;
+    
+    // 验证相机参数
+    if (!VerifyCameraParams(reader_options.camera_model,
+                            reader_options.camera_params)) {
+      std::cerr << "ERROR: 相机参数验证失败" << std::endl;
+      return EXIT_FAILURE;
+    }
+    
+    // 验证GPU参数
+    if (!VerifySiftGPUParams(options.sift_extraction->use_gpu)) {
+      std::cerr << "ERROR: GPU参数验证失败" << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    // 创建特征提取器
+    SiftFeatureExtractor feature_extractor(reader_options, *options.sift_extraction);
+
+    std::cout << "图像列表: " << reader_options.image_list.size() << std::endl;
+
+    // 执行特征提取
+    if (options.sift_extraction->use_gpu && kUseOpenGL) {
+      // GPU模式
+      std::unique_ptr<QApplication> app(new QApplication(argc, argv));
+      RunThreadWithOpenGLContext(&feature_extractor);
+    } else {
+      // CPU模式
+      feature_extractor.Start();
+      feature_extractor.Wait();
+    }
+    
+    std::cout << "特征提取完成" << std::endl;
+  }
+  
+  // 第二步：特征匹配
+  std::cout << "步骤2: 特征匹配..." << std::endl;
+  {
+    // 验证GPU参数
+    if (!VerifySiftGPUParams(options.sift_matching->use_gpu)) {
+      std::cerr << "ERROR: GPU参数验证失败" << std::endl;
+      return EXIT_FAILURE;
+    }
+    
+    // 创建穷举特征匹配器
+    SequentialFeatureMatcher feature_matcher(*options.sequential_matching,
+                                             *options.sift_matching,
+                                             database_path);
+    
+    // 执行特征匹配
+    if (options.sift_matching->use_gpu && kUseOpenGL) {
+      // GPU模式
+      std::unique_ptr<QApplication> app(new QApplication(argc, argv));
+      RunThreadWithOpenGLContext(&feature_matcher);
+    } else {
+      // CPU模式
+      feature_matcher.Start();
+      feature_matcher.Wait();
+    }
+    
+    std::cout << "特征匹配完成" << std::endl;
+  }
+  
+  // 第三步：增量重建
+  std::cout << "步骤3: 增量重建..." << std::endl;
+  // 创建重建管理器
+  ReconstructionManager reconstruction_manager;
+  {
+    
+    // 创建增量映射器控制器
+    IncrementalMapperController mapper(options.mapper.get(), image_path,
+                                       database_path, &reconstruction_manager);
+    
+    // 执行增量重建
+    mapper.Start();
+    mapper.Wait();
+    
+    // 检查重建结果
+    if (reconstruction_manager.Size() == 0) {
+      std::cerr << "ERROR: 重建失败，未生成稀疏模型" << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    std::cout << "重建图像数量: " << reconstruction_manager.Get(0).NumRegImages() << std::endl;
+    
+    // 保存重建结果
+    // const std::string sparse_path = JoinPaths(workspace_path, "sparse");
+    // CreateDirIfNotExists(sparse_path);
+    // reconstruction_manager.Get(0).Write(sparse_path);
+    
+    // // 保存项目配置文件
+    // options.Write(JoinPaths(sparse_path, "project.ini"));
+    
+    std::cout << "增量重建完成" << std::endl;
+  }
+
+  // 第四步：全局BA
+  std::cout << "步骤4: 全局BA..." << std::endl;
+  if (false)
+  {
+    std::string input_path;
+    std::string output_path;
+    output_path = JoinPaths(workspace_path, "sparse");
+
+    if (!ExistsDir(output_path)) {
+      std::cout << "输出文件不存在: " << output_path << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    // Reconstruction reconstruction;
+    // reconstruction.Read(input_path);
+
+    BundleAdjustmentController ba_controller(options, &reconstruction_manager.Get(0));
+    ba_controller.Start();
+    ba_controller.Wait();
+
+    reconstruction_manager.Get(0).Write(output_path);
+  }
+  
+  // 生成配置文件
+  // std::cout << "生成配置文件..." << std::endl;
+  // GenerateDefaultConfigFile(workspace_path);
+  
+  std::cout << "=== 重建流程完成 ===" << std::endl;
+  timer.PrintMinutes();
+  return EXIT_SUCCESS;
+}
 
 int RunAutomaticReconstructor(int argc, char** argv) {
   AutomaticReconstructionController::Options reconstruction_options;
