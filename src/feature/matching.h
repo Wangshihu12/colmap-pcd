@@ -55,7 +55,7 @@ struct ExhaustiveMatchingOptions {
 
 struct SequentialMatchingOptions {
   // Number of overlapping image pairs.
-  int overlap = 20;
+  int overlap = 10;
 
   // Whether to match images against their quadratic neighbors.
   bool quadratic_overlap = true;

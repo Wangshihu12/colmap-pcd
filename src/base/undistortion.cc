@@ -165,73 +165,101 @@ COLMAPUndistorter::COLMAPUndistorter(const UndistortCameraOptions& options,
       reconstruction_(reconstruction),
       image_ids_(image_ids) {}
 
+/**
+ * [功能描述]：执行图像去畸变处理的主函数，包括创建输出目录、并行处理图像、生成配置文件等
+ * @return 无返回值
+ */
 void COLMAPUndistorter::Run() {
+  // 打印处理标题
   PrintHeading1("Image undistortion");
 
-  CreateDirIfNotExists(JoinPaths(output_path_, "images"));
-  CreateDirIfNotExists(JoinPaths(output_path_, "sparse"));
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo"));
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/depth_maps"));
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/normal_maps"));
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/consistency_graphs"));
-  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "images"));
-  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/depth_maps"));
-  reconstruction_.CreateImageDirs(
-      JoinPaths(output_path_, "stereo/normal_maps"));
-  reconstruction_.CreateImageDirs(
-      JoinPaths(output_path_, "stereo/consistency_graphs"));
+  // 创建输出目录结构
+  CreateDirIfNotExists(JoinPaths(output_path_, "images"));                    // 去畸变图像输出目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "sparse"));                    // 稀疏重建结果目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "stereo"));                    // 立体视觉处理目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/depth_maps"));         // 深度图目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/normal_maps"));        // 法向量图目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/consistency_graphs")); // 一致性图目录
+  
+  // 为重建中的每个图像创建对应的子目录
+  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "images"));                    // 为去畸变图像创建子目录
+  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/depth_maps"));         // 为深度图创建子目录
+  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/normal_maps"));        // 为法向量图创建子目录
+  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/consistency_graphs")); // 为一致性图创建子目录
 
+  // 创建线程池用于并行处理图像去畸变
   ThreadPool thread_pool;
+  // 存储异步任务的future对象，用于获取处理结果
   std::vector<std::future<bool>> futures;
+  // 预分配空间以提高性能
   futures.reserve(reconstruction_.NumRegImages());
+  
+  // 根据是否指定了特定图像ID来决定处理范围
   if (image_ids_.empty()) {
+    // 如果没有指定特定图像，处理所有已注册的图像
     for (size_t i = 0; i < reconstruction_.NumRegImages(); ++i) {
       const image_t image_id = reconstruction_.RegImageIds().at(i);
+      // 将去畸变任务添加到线程池中异步执行
       futures.push_back(
           thread_pool.AddTask(&COLMAPUndistorter::Undistort, this, image_id));
     }
   } else {
+    // 如果指定了特定图像ID列表，只处理这些图像
     for (const image_t image_id : image_ids_) {
+      // 将去畸变任务添加到线程池中异步执行
       futures.push_back(
           thread_pool.AddTask(&COLMAPUndistorter::Undistort, this, image_id));
     }
   }
 
-  // Only use the image names for the successfully undistorted images
-  // when writing the MVS config files
+  // 清空图像名称列表，只保留成功去畸变的图像名称用于写入MVS配置文件
   image_names_.clear();
+  // 等待所有异步任务完成并收集结果
   for (size_t i = 0; i < futures.size(); ++i) {
+    // 检查是否被停止，如果是则中断处理
     if (IsStopped()) {
       break;
     }
 
+    // 打印处理进度信息
     std::cout << StringPrintf("Undistorting image [%d/%d]", i + 1,
                               futures.size())
               << std::endl;
 
+    // 获取异步任务的结果（true表示成功，false表示失败）
     if (futures[i].get()) {
+      // 如果去畸变成功，将图像名称添加到列表中
       if (image_ids_.empty()) {
+        // 处理所有图像的情况
         const image_t image_id = reconstruction_.RegImageIds().at(i);
         image_names_.push_back(reconstruction_.Image(image_id).Name());
       } else {
+        // 处理指定图像的情况
         image_names_.push_back(reconstruction_.Image(image_ids_[i]).Name());
       }
     }
   }
 
+  // 写入去畸变后的重建结果
   std::cout << "Writing reconstruction..." << std::endl;
+  // 创建重建对象的副本
   Reconstruction undistorted_reconstruction = reconstruction_;
+  // 对重建结果进行去畸变处理
   UndistortReconstruction(options_, &undistorted_reconstruction);
+  // 将去畸变后的重建结果写入sparse目录
   undistorted_reconstruction.Write(JoinPaths(output_path_, "sparse"));
 
+  // 写入MVS（多视图立体视觉）配置文件
   std::cout << "Writing configuration..." << std::endl;
-  WritePatchMatchConfig();
-  WriteFusionConfig();
+  WritePatchMatchConfig();  // 写入PatchMatch算法配置文件
+  WriteFusionConfig();      // 写入融合算法配置文件
 
+  // 写入处理脚本
   std::cout << "Writing scripts..." << std::endl;
-  WriteScript(false);
-  WriteScript(true);
+  WriteScript(false);  // 写入非CUDA版本的脚本
+  WriteScript(true);   // 写入CUDA版本的脚本
 
+  // 打印处理时间统计
   GetTimer().PrintMinutes();
 }
 
@@ -951,24 +979,46 @@ void UndistortImage(const UndistortCameraOptions& options,
                           distorted_bitmap, undistorted_bitmap);
 }
 
+/**
+ * [功能描述]：对整个重建结果进行去畸变处理，包括相机参数和图像特征点的去畸变
+ * @param options 去畸变选项配置，包含去畸变参数
+ * @param reconstruction 指向重建对象的指针，将被修改为去畸变后的结果
+ * @return 无返回值
+ */
 void UndistortReconstruction(const UndistortCameraOptions& options,
                              Reconstruction* reconstruction) {
+  // 获取重建中所有相机的副本（畸变前的相机参数）
   const auto distorted_cameras = reconstruction->Cameras();
+  
+  // 第一步：对重建中的所有相机进行去畸变处理
   for (const auto& camera : distorted_cameras) {
+    // 如果相机已经是去畸变的，则跳过处理
     if (camera.second.IsUndistorted()) {
       continue;
     }
+    // 使用去畸变选项对相机参数进行去畸变处理，并更新重建中的相机参数
     reconstruction->Camera(camera.first) =
         UndistortCamera(options, camera.second);
   }
 
+  // 第二步：对重建中所有图像的特征点进行去畸变处理
   for (const auto& distorted_image : reconstruction->Images()) {
+    // 获取当前图像的引用
     auto& image = reconstruction->Image(distorted_image.first);
+    // 获取该图像对应的畸变前相机参数
     const auto& distorted_camera = distorted_cameras.at(image.CameraId());
+    // 获取该图像对应的去畸变后相机参数
     const auto& undistorted_camera = reconstruction->Camera(image.CameraId());
+    
+    // 遍历图像中的所有2D特征点
     for (point2D_t point2D_idx = 0; point2D_idx < image.NumPoints2D();
          ++point2D_idx) {
+      // 获取当前2D特征点的引用
       auto& point2D = image.Point2D(point2D_idx);
+      
+      // 对2D特征点进行去畸变处理：
+      // 1. 使用畸变相机参数将图像坐标转换为世界坐标（去除畸变）
+      // 2. 使用去畸变相机参数将世界坐标转换回图像坐标（应用新的相机模型）
       point2D.SetXY(undistorted_camera.WorldToImage(
           distorted_camera.ImageToWorld(point2D.XY())));
     }

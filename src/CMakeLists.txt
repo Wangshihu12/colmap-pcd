@@ -29,67 +29,78 @@
 #
 # Author: Johannes L. Schoenberger (jsch-at-demuc-dot-de)
 
+# 编译器警告级别和C++标准设置
 if(IS_MSVC)
+    # 如果是Microsoft Visual C++编译器，设置警告级别为/W3（中等警告级别）
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W3")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3")
 elseif(IS_GNU OR IS_CLANG)
+    # 如果是GNU GCC或Clang编译器，启用所有警告（-Wall）
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
-    # We want c++14 mainly for supporting latest dependencies, but older GCC
-    # versions in combination with CUDA do not yet support it. In the worst
-    # case, this will lead to compile errors and there is not much we can
-    # do on the COLMAP side.
+    # 我们主要希望使用C++14来支持最新的依赖项，但较旧的GCC版本
+    # 与CUDA结合使用时还不支持C++14。在最坏的情况下，这会导致编译错误，
+    # 在COLMAP这边我们无能为力。
     if(CUDA_ENABLED AND
        IS_GNU AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 6)
+        # 如果启用了CUDA且GCC版本小于6，则使用C++11标准
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
     else()
+        # 否则使用C++14标准
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
     endif()
 endif()
 
-add_subdirectory(base)
-add_subdirectory(controllers)
-add_subdirectory(estimators)
-add_subdirectory(exe)
-add_subdirectory(feature)
-add_subdirectory(mvs)
-add_subdirectory(optim)
-add_subdirectory(retrieval)
-add_subdirectory(sfm)
-add_subdirectory(tools)
-add_subdirectory(util)
-add_subdirectory(lidar)
+# 添加各个子目录到构建系统中
+add_subdirectory(base)        # 基础库模块
+add_subdirectory(controllers) # 控制器模块
+add_subdirectory(estimators)  # 估计器模块
+add_subdirectory(exe)         # 可执行文件模块
+add_subdirectory(feature)     # 特征提取模块
+add_subdirectory(mvs)         # 多视图立体视觉模块
+add_subdirectory(optim)       # 优化模块
+add_subdirectory(retrieval)   # 检索模块
+add_subdirectory(sfm)         # 结构从运动模块
+add_subdirectory(tools)       # 工具模块
+add_subdirectory(util)        # 工具函数模块
+add_subdirectory(lidar)       # 激光雷达模块
 if (GUI_ENABLED)
+    # 如果启用了GUI，则添加用户界面模块
     add_subdirectory(ui)
 endif()
 
+# 创建主要的COLMAP库
 COLMAP_ADD_LIBRARY(colmap ${COLMAP_SOURCES})
 
+# CUDA相关配置
 if(CUDA_ENABLED)
+    # 启用CUDA快速数学运算（使用更快的数学函数，但精度可能略低）
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --use_fast_math")
 
-    # Use a separate stream per thread to allow for concurrent kernel execution
-    # between multiple threads on the same device.
+    # 使用每个线程单独的流，以允许同一设备上多个线程之间的并发内核执行
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --default-stream per-thread")
 
-    # Suppress warnings:
-    # ptxas warning : Stack size for entry function X cannot be statically determined.
+    # 抑制警告：
+    # ptxas警告：入口函数X的堆栈大小无法静态确定
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas=-suppress-stack-size-warning")
 
-    # Fix for Ubuntu 16.04.
+    # Ubuntu 16.04的修复
     add_definitions("-D_MWAITXINTRIN_H_INCLUDED")
 
     if(MSVC)
-        # Avoid pulling in too many header files through <windows.h>
+        # 避免通过<windows.h>引入过多的头文件
         add_definitions("-DWIN32_LEAN_AND_MEAN")
     endif()
 
+    # 创建CUDA库并链接到主库
     COLMAP_ADD_CUDA_LIBRARY(colmap_cuda ${COLMAP_CUDA_SOURCES})
     target_link_libraries(colmap_cuda colmap)
 
+    # 将CUDA库和所有依赖库链接到主库
     target_link_libraries(colmap
         colmap_cuda ${COLMAP_INTERNAL_LIBRARIES} ${COLMAP_EXTERNAL_LIBRARIES})
 else()
+    # 如果没有启用CUDA，只链接内部和外部库
     target_link_libraries(colmap
         ${COLMAP_INTERNAL_LIBRARIES} ${COLMAP_EXTERNAL_LIBRARIES})
 endif()
