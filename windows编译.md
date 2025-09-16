@@ -7,6 +7,6 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake `
            -Dglog_DIR=C:/src/vcpkg/installed/x64-windows/share/glog `
            -DCMAKE_INSTALL_PREFIX=F:\github\colmap-pcd\install
 
-cmake --build . --config release --target colmap_api --parallel 24
+cmake --build . --config release --parallel 24
 
 cmake --install . --config Release
