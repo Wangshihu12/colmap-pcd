@@ -1148,9 +1148,8 @@ bool IncrementalMapperController::LoadColmapPose() {
   read_pose.close();
   
   // 输出读取成功的位姿数量信息
-  std::cout<<"读取到 " << image_poses_.size() << " 个位姿"<<std::endl
-  << options_->image_pose_prior_path << std::endl
-  << std::endl;
+  std::cout << "Successfully read " << image_poses_.size() << " poses from: " 
+          << options_->image_pose_prior_path << std::endl;
   
   return true;  // 加载成功，返回true
 }

@@ -77,7 +77,7 @@ bool VerifyCameraParams(const std::string& camera_model,
   // 如果提供了相机参数，则验证参数的有效性
   if (camera_params.size() > 0 &&
       !CameraModelVerifyParams(camera_model_id, camera_params)) {
-    std::cerr << "错误: 无效的相机参数" << std::endl;
+    std::cerr << "Error: Invalid camera parameters" << std::endl;
     return false;
   }
   if (camera_params.size() == 0) {
@@ -386,7 +386,7 @@ int RunReconstructorFromYaml(int argc, char** argv)
     
     // 检查重建结果
     if (reconstruction_manager.Size() == 0) {
-      std::cerr << "ERROR: 重建失败，未生成稀疏模型" << std::endl;
+      std::cerr << "ERROR: Reconstruction failed, no sparse model generated" << std::endl;
       return EXIT_FAILURE;
     }
 
