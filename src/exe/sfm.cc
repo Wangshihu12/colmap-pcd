@@ -431,19 +431,19 @@ int RunReconstructorFromYaml(int argc, char** argv)
   // 第五步：保存结果
   std::cout << "步骤5: 保存结果..." << std::endl;
   {
-    // std::string output_path;
-    // output_path = JoinPaths(workspace_path, "colmap");
-    // if (!ExistsDir(output_path)) {
-    //   CreateDirIfNotExists(output_path);
-    // }
+    std::string output_path;
+    output_path = JoinPaths(workspace_path, "colmap");
+    if (!ExistsDir(output_path)) {
+      CreateDirIfNotExists(output_path);
+    }
 
-    // UndistortCameraOptions undistortion_options;
-    // COLMAPUndistorter undistorter(undistortion_options,
-    //                               reconstruction_manager.Get(0),
-    //                               *options.image_path, output_path);
+    UndistortCameraOptions undistortion_options;
+    COLMAPUndistorter undistorter(undistortion_options,
+                                  reconstruction_manager.Get(0),
+                                  *options.image_path, output_path);
 
-    // undistorter.Start();
-    // undistorter.Wait();
+    undistorter.Start();
+    undistorter.Wait();
 
     // 保存稀疏模型
     std::string sparse_path;
@@ -451,7 +451,7 @@ int RunReconstructorFromYaml(int argc, char** argv)
     // if txt
     // reconstruction_manager.Get(0).WriteText(output_path);
     // if bin
-    reconstruction_manager.Get(0).WriteBinary(sparse_path);
+    // reconstruction_manager.Get(0).WriteBinary(sparse_path);
 
     // 将去畸变后的重建结果写入sparse目录
     // undistorted_reconstruction.Write(sparse_path);

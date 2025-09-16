@@ -176,16 +176,17 @@ void COLMAPUndistorter::Run() {
   // 创建输出目录结构
   CreateDirIfNotExists(JoinPaths(output_path_, "images"));                    // 去畸变图像输出目录
   CreateDirIfNotExists(JoinPaths(output_path_, "sparse"));                    // 稀疏重建结果目录
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo"));                    // 立体视觉处理目录
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/depth_maps"));         // 深度图目录
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/normal_maps"));        // 法向量图目录
-  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/consistency_graphs")); // 一致性图目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "sparse/0"));                    // 稀疏重建结果目录
+  // CreateDirIfNotExists(JoinPaths(output_path_, "stereo"));                    // 立体视觉处理目录
+  // CreateDirIfNotExists(JoinPaths(output_path_, "stereo/depth_maps"));         // 深度图目录
+  // CreateDirIfNotExists(JoinPaths(output_path_, "stereo/normal_maps"));        // 法向量图目录
+  // CreateDirIfNotExists(JoinPaths(output_path_, "stereo/consistency_graphs")); // 一致性图目录
   
   // 为重建中的每个图像创建对应的子目录
   reconstruction_.CreateImageDirs(JoinPaths(output_path_, "images"));                    // 为去畸变图像创建子目录
-  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/depth_maps"));         // 为深度图创建子目录
-  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/normal_maps"));        // 为法向量图创建子目录
-  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/consistency_graphs")); // 为一致性图创建子目录
+  // reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/depth_maps"));         // 为深度图创建子目录
+  // reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/normal_maps"));        // 为法向量图创建子目录
+  // reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/consistency_graphs")); // 为一致性图创建子目录
 
   // 创建线程池用于并行处理图像去畸变
   ThreadPool thread_pool;
@@ -247,17 +248,17 @@ void COLMAPUndistorter::Run() {
   // 对重建结果进行去畸变处理
   UndistortReconstruction(options_, &undistorted_reconstruction);
   // 将去畸变后的重建结果写入sparse目录
-  undistorted_reconstruction.Write(JoinPaths(output_path_, "sparse"));
+  undistorted_reconstruction.Write(JoinPaths(output_path_, "sparse/0"));
 
-  // 写入MVS（多视图立体视觉）配置文件
-  std::cout << "Writing configuration..." << std::endl;
-  WritePatchMatchConfig();  // 写入PatchMatch算法配置文件
-  WriteFusionConfig();      // 写入融合算法配置文件
+  // // 写入MVS（多视图立体视觉）配置文件
+  // std::cout << "Writing configuration..." << std::endl;
+  // WritePatchMatchConfig();  // 写入PatchMatch算法配置文件
+  // WriteFusionConfig();      // 写入融合算法配置文件
 
-  // 写入处理脚本
-  std::cout << "Writing scripts..." << std::endl;
-  WriteScript(false);  // 写入非CUDA版本的脚本
-  WriteScript(true);   // 写入CUDA版本的脚本
+  // // 写入处理脚本
+  // std::cout << "Writing scripts..." << std::endl;
+  // WriteScript(false);  // 写入非CUDA版本的脚本
+  // WriteScript(true);   // 写入CUDA版本的脚本
 
   // 打印处理时间统计
   GetTimer().PrintMinutes();
