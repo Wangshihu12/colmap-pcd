@@ -72,6 +72,16 @@ endif()
 # 创建主要的COLMAP库
 COLMAP_ADD_LIBRARY(colmap ${COLMAP_SOURCES})
 
+# 在定义colmap库的地方，确保符号可见性
+if(BUILD_SHARED_LIBS OR BUILD_API)
+    # 确保内部符号对API可见
+    target_compile_definitions(colmap PRIVATE COLMAP_BUILD_SHARED_LIBS)
+endif()
+
+if(BUILD_API)
+    add_subdirectory(colmap_api)
+endif()
+
 # CUDA相关配置
 if(CUDA_ENABLED)
     # 启用CUDA快速数学运算（使用更快的数学函数，但精度可能略低）

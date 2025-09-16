@@ -84,6 +84,8 @@ option(CGAL_ENABLED "Whether to enable the CGAL library" ON)
 option(BOOST_STATIC "Whether to enable static boost library linker flags" ON)
 # 激光雷达测试选项：启用测试图像实时显示
 option(TEST_LIDAR_ENABLED "Whether to enable test images real-time display" ON)
+# API支持选项：启用COLMAP API
+option(BUILD_API "Build COLMAP API library" ON)
 
 # 如果启用了测试，则启用CMake测试功能
 if(TESTS_ENABLED)

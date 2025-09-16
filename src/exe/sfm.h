@@ -54,6 +54,7 @@ int RunPointTriangulator(int argc, char** argv);
 int RunRigBundleAdjuster(int argc, char** argv);
 
 int RunReconstructorFromYaml(int argc, char** argv);
+int AutomaticReconstructor();
 
 }  // namespace colmap
 

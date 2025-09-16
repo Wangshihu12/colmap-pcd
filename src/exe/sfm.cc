@@ -468,6 +468,304 @@ int RunReconstructorFromYaml(int argc, char** argv)
   return EXIT_SUCCESS;
 }
 
+int AutomaticReconstructor() {
+  // 计时
+  Timer timer;
+  timer.Start();
+
+  // 构建配置文件路径：项目根目录下的config文件夹
+  std::string config_file = "/home/goslam/catkin_colmap-pcd/src/colmap-pcd/config/reconstruction_config.yaml";
+
+  // 检查配置文件是否存在
+  if (!ExistsFile(config_file)) {
+    std::cout << "配置文件不存在: " << config_file << std::endl;
+    return EXIT_FAILURE;
+  } else {
+    std::cout << "配置文件路径: " << config_file << std::endl;
+  }
+
+  // 加载YAML文件
+  YAML::Node config = YAML::LoadFile(config_file);
+  
+  // 创建选项管理器
+  OptionManager options;
+  options.AddAllOptions();
+  
+  // 从YAML读取基本路径配置
+  std::string workspace_path, image_path, database_path;
+  if (config["workspace_path"]) {
+    workspace_path = config["workspace_path"].as<std::string>();
+  } else {
+    std::cerr << "ERROR: 配置文件中缺少workspace_path参数" << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  if (config["image_path"]) {
+    image_path = config["image_path"].as<std::string>();
+  } else {
+    std::cerr << "ERROR: 配置文件中缺少image_path参数" << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // 设置数据库路径
+  database_path = JoinPaths(workspace_path, "database.db");
+  
+  // 设置基本路径
+  *options.database_path = database_path;
+  *options.image_path = image_path;
+
+  // TODO: 读取点云文件，读取相机先验位姿
+  if (config["lidar_pointcloud_path"]) {
+    std::string lidar_pointcloud_path = config["lidar_pointcloud_path"].as<std::string>();
+    if (!lidar_pointcloud_path.empty()) {
+      options.mapper->if_add_lidar_constraint = true;
+      options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
+    }
+  }
+
+  // 从YAML读取并设置其他参数
+  if (config["mask_path"]) {
+    std::string mask_path = config["mask_path"].as<std::string>();
+    if (!mask_path.empty()) {
+      options.image_reader->mask_path = mask_path;
+    }
+  }
+  
+  if (config["camera_model"]) {
+    options.image_reader->camera_model = config["camera_model"].as<std::string>();
+  }
+
+  if (config["camera_params"]) {
+    options.image_reader->camera_params = config["camera_params"].as<std::string>();
+  }
+  
+  if (config["single_camera"]) {
+    options.image_reader->single_camera = config["single_camera"].as<bool>();
+  }
+  
+  if (config["use_gpu"]) {
+    bool use_gpu = config["use_gpu"].as<bool>();
+    options.sift_extraction->use_gpu = use_gpu;
+    options.sift_matching->use_gpu = use_gpu;
+  }
+  
+  // if (config["num_threads"]) {
+  //   int num_threads = config["num_threads"].as<int>();
+  //   options.sift_extraction->num_threads = num_threads;
+  //   options.sift_matching->num_threads = num_threads;
+  //   options.mapper->num_threads = num_threads;
+  // }
+  
+  // if (config["gpu_index"]) {
+  //   std::string gpu_index = config["gpu_index"].as<std::string>();
+  //   options.sift_extraction->gpu_index = gpu_index;
+  //   options.sift_matching->gpu_index = gpu_index;
+  // }
+  
+  // // 根据数据类型和质量调整配置
+  // if (config["data_type"]) {
+  //   std::string data_type = config["data_type"].as<std::string>();
+  //   StringToLower(&data_type);
+  //   if (data_type == "video") {
+  //     options.ModifyForVideoData();
+  //   } else if (data_type == "individual") {
+  //     options.ModifyForIndividualData();
+  //   } else if (data_type == "internet") {
+  //     options.ModifyForInternetData();
+  //   }
+  // }
+  
+  // if (config["quality"]) {
+  //   std::string quality = config["quality"].as<std::string>();
+  //   StringToLower(&quality);
+  //   if (quality == "low") {
+  //     options.ModifyForLowQuality();
+  //   } else if (quality == "medium") {
+  //     options.ModifyForMediumQuality();
+  //   } else if (quality == "high") {
+  //     options.ModifyForHighQuality();
+  //   } else if (quality == "extreme") {
+  //     options.ModifyForExtremeQuality();
+  //   }
+  // }
+
+  // 验证配置
+  if (!options.Check()) {
+    std::cerr << "ERROR: 配置验证失败" << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  // 检查工作空间和图像目录
+  if (!ExistsDir(workspace_path)) {
+    std::cout << "工作空间目录不存在，正在创建: " << workspace_path << std::endl;
+    CreateDirIfNotExists(workspace_path);
+  }
+  
+  if (!ExistsDir(image_path)) {
+    std::cerr << "ERROR: 图像目录不存在: " << image_path << std::endl;
+    return EXIT_FAILURE;
+  }
+  
+  std::cout << "=== 开始执行重建流程 ===" << std::endl;
+  
+  // 第一步：特征提取
+  std::cout << "步骤1: 特征提取..." << std::endl;
+  {
+    // 配置图像读取器选项
+    ImageReaderOptions reader_options = *options.image_reader;
+    reader_options.database_path = database_path;
+    reader_options.image_path = image_path;
+
+    std::string descriptor_normalization = "l1_root";
+    options.sift_extraction->normalization = SiftExtractionOptions::Normalization::L1_ROOT;
+    
+    // 验证相机参数
+    if (!VerifyCameraParams(reader_options.camera_model,
+                            reader_options.camera_params)) {
+      std::cerr << "ERROR: 相机参数验证失败" << std::endl;
+      return EXIT_FAILURE;
+    }
+    
+    // 验证GPU参数
+    if (!VerifySiftGPUParams(options.sift_extraction->use_gpu)) {
+      std::cerr << "ERROR: GPU参数验证失败" << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    // 创建特征提取器
+    SiftFeatureExtractor feature_extractor(reader_options, *options.sift_extraction);
+
+    std::cout << "图像列表: " << reader_options.image_list.size() << std::endl;
+
+    // 执行特征提取
+    // CPU模式
+    feature_extractor.Start();
+    feature_extractor.Wait();
+    
+    std::cout << "特征提取完成" << std::endl;
+  }
+  
+  // 第二步：特征匹配
+  std::cout << "步骤2: 特征匹配..." << std::endl;
+  {
+    // 验证GPU参数
+    if (!VerifySiftGPUParams(options.sift_matching->use_gpu)) {
+      std::cerr << "ERROR: GPU参数验证失败" << std::endl;
+      return EXIT_FAILURE;
+    }
+    
+    // 创建穷举特征匹配器
+    // ExhaustiveFeatureMatcher feature_matcher(*options.exhaustive_matching,
+    SequentialFeatureMatcher feature_matcher(*options.sequential_matching,
+                                             *options.sift_matching,
+                                             database_path);
+    
+    // 执行特征匹配
+    // CPU模式
+    feature_matcher.Start();
+    feature_matcher.Wait();
+    
+    std::cout << "特征匹配完成" << std::endl;
+  }
+  
+  // 第三步：增量重建
+  std::cout << "步骤3: 增量重建..." << std::endl;
+  // 创建重建管理器
+  ReconstructionManager reconstruction_manager;
+  {
+    
+    // 创建增量映射器控制器
+    IncrementalMapperController mapper(options.mapper.get(), image_path,
+                                       database_path, &reconstruction_manager);
+    
+    // 执行增量重建
+    mapper.Start();
+    mapper.Wait();
+    
+    // 检查重建结果
+    if (reconstruction_manager.Size() == 0) {
+      std::cerr << "ERROR: Reconstruction failed, no sparse model generated" << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    std::cout << "重建图像数量: " << reconstruction_manager.Get(0).NumRegImages() << std::endl;
+    
+    // 保存重建结果
+    // const std::string sparse_path = JoinPaths(workspace_path, "sparse");
+    // CreateDirIfNotExists(sparse_path);
+    // reconstruction_manager.Get(0).Write(sparse_path);
+    
+    // // 保存项目配置文件
+    // options.Write(JoinPaths(sparse_path, "project.ini"));
+    
+    std::cout << "增量重建完成" << std::endl;
+  }
+
+  // 第四步：全局BA
+  std::cout << "步骤4: 全局BA..." << std::endl;
+  if (false)
+  {
+    std::string input_path;
+    std::string output_path;
+    output_path = JoinPaths(workspace_path, "sparse");
+
+    if (!ExistsDir(output_path)) {
+      std::cout << "输出文件不存在: " << output_path << std::endl;
+      return EXIT_FAILURE;
+    }
+
+    // Reconstruction reconstruction;
+    // reconstruction.Read(input_path);
+
+    BundleAdjustmentController ba_controller(options, &reconstruction_manager.Get(0));
+    ba_controller.Start();
+    ba_controller.Wait();
+
+    // reconstruction_manager.Get(0).Write(output_path);
+
+    std::cout << "全局BA完成" << std::endl;
+  }
+
+  // 第五步：保存结果
+  std::cout << "步骤5: 保存结果..." << std::endl;
+  {
+    std::string output_path;
+    output_path = JoinPaths(workspace_path, "colmap");
+    if (!ExistsDir(output_path)) {
+      CreateDirIfNotExists(output_path);
+    }
+
+    UndistortCameraOptions undistortion_options;
+    COLMAPUndistorter undistorter(undistortion_options,
+                                  reconstruction_manager.Get(0),
+                                  *options.image_path, output_path);
+
+    undistorter.Start();
+    undistorter.Wait();
+
+    // 保存稀疏模型
+    std::string sparse_path;
+    sparse_path = workspace_path + "/sparse/0";
+    // if txt
+    // reconstruction_manager.Get(0).WriteText(output_path);
+    // if bin
+    // reconstruction_manager.Get(0).WriteBinary(sparse_path);
+
+    // 将去畸变后的重建结果写入sparse目录
+    // undistorted_reconstruction.Write(sparse_path);
+
+    std::cout << "结果保存完成" << std::endl;
+  }
+
+  // 生成配置文件
+  // std::cout << "生成配置文件..." << std::endl;
+  // GenerateDefaultConfigFile(workspace_path);
+  
+  std::cout << "=== 重建流程完成 ===" << std::endl;
+  timer.PrintMinutes();
+  return EXIT_SUCCESS;
+}
+
 int RunAutomaticReconstructor(int argc, char** argv) {
   AutomaticReconstructionController::Options reconstruction_options;
   std::string data_type = "individual";
