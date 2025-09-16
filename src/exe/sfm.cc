@@ -468,45 +468,30 @@ int RunReconstructorFromYaml(int argc, char** argv)
   return EXIT_SUCCESS;
 }
 
-int AutomaticReconstructor() {
+int AutomaticReconstructor(std::string _workspace_path) {
   // 计时
   Timer timer;
   timer.Start();
 
-  // 构建配置文件路径：项目根目录下的config文件夹
-  std::string config_file = "/home/goslam/catkin_colmap-pcd/src/colmap-pcd/config/reconstruction_config.yaml";
-
-  // 检查配置文件是否存在
-  if (!ExistsFile(config_file)) {
-    std::cout << "配置文件不存在: " << config_file << std::endl;
-    return EXIT_FAILURE;
-  } else {
-    std::cout << "配置文件路径: " << config_file << std::endl;
-  }
-
-  // 加载YAML文件
-  YAML::Node config = YAML::LoadFile(config_file);
-  
   // 创建选项管理器
   OptionManager options;
   options.AddAllOptions();
   
   // 从YAML读取基本路径配置
   std::string workspace_path, image_path, database_path;
-  if (config["workspace_path"]) {
-    workspace_path = config["workspace_path"].as<std::string>();
+  if (!_workspace_path.empty()) {
+    workspace_path = _workspace_path;
   } else {
-    std::cerr << "ERROR: 配置文件中缺少workspace_path参数" << std::endl;
+    std::cerr << "ERROR: workspace_path is empty" << std::endl;
     return EXIT_FAILURE;
   }
   
-  if (config["image_path"]) {
-    image_path = config["image_path"].as<std::string>();
-  } else {
-    std::cerr << "ERROR: 配置文件中缺少image_path参数" << std::endl;
+  image_path = JoinPaths(workspace_path, "images");
+  if (!ExistsDir(image_path)) {
+    std::cerr << "ERROR: images directory not found:" << image_path << std::endl;
     return EXIT_FAILURE;
   }
-  
+
   // 设置数据库路径
   database_path = JoinPaths(workspace_path, "database.db");
   
@@ -515,80 +500,59 @@ int AutomaticReconstructor() {
   *options.image_path = image_path;
 
   // TODO: 读取点云文件，读取相机先验位姿
-  if (config["lidar_pointcloud_path"]) {
-    std::string lidar_pointcloud_path = config["lidar_pointcloud_path"].as<std::string>();
-    if (!lidar_pointcloud_path.empty()) {
-      options.mapper->if_add_lidar_constraint = true;
-      options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
+  std::string lidar_pointcloud_path = JoinPaths(workspace_path, "plane_cloud.ply");
+  if (!ExistsFile(lidar_pointcloud_path)) {
+    options.mapper->if_add_lidar_constraint = true;
+    options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
+  }
+
+  options.image_reader->camera_model = "PINHOLE";
+
+  // 从 cameras.txt 读取相机内参
+  std::string cameras_file_path = JoinPaths(workspace_path, "sparse/0/cameras.txt");
+  if (ExistsFile(cameras_file_path)) {
+    std::ifstream cameras_file(cameras_file_path);
+    std::string line;
+    
+    // 逐行读取文件，跳过注释行
+    while (std::getline(cameras_file, line)) {
+      // 跳过注释行和空行
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+      
+      // 解析相机参数行
+      std::istringstream iss(line);
+      int camera_id;
+      std::string model;
+      int width, height;
+      double fx, fy, cx, cy;
+      
+      // 按顺序读取：CAMERA_ID MODEL WIDTH HEIGHT fx fy cx cy
+      if (iss >> camera_id >> model >> width >> height >> fx >> fy >> cx >> cy) {
+        // 构建相机参数字符串，格式为 "fx,fy,cx,cy"
+        std::ostringstream params_stream;
+        params_stream << fx << "," << fy << "," << cx << "," << cy;
+        options.image_reader->camera_params = params_stream.str();
+        
+        std::cout << "从cameras.txt读取相机内参: fx=" << fx 
+                  << ", fy=" << fy << ", cx=" << cx << ", cy=" << cy << std::endl;
+        break; // 只读取第一个相机的参数
+      } else {
+        std::cerr << "WARNING: 无法解析cameras.txt中的相机参数行: " << line << std::endl;
+      }
     }
-  }
-
-  // 从YAML读取并设置其他参数
-  if (config["mask_path"]) {
-    std::string mask_path = config["mask_path"].as<std::string>();
-    if (!mask_path.empty()) {
-      options.image_reader->mask_path = mask_path;
-    }
+    cameras_file.close();
+  } else {
+    std::cerr << "WARNING: 未找到cameras.txt文件" << std::endl;
   }
   
-  if (config["camera_model"]) {
-    options.image_reader->camera_model = config["camera_model"].as<std::string>();
-  }
-
-  if (config["camera_params"]) {
-    options.image_reader->camera_params = config["camera_params"].as<std::string>();
-  }
+  options.image_reader->single_camera = true;
   
-  if (config["single_camera"]) {
-    options.image_reader->single_camera = config["single_camera"].as<bool>();
-  }
+  bool use_gpu = false;
+  options.sift_extraction->use_gpu = use_gpu;
+  options.sift_matching->use_gpu = use_gpu;
   
-  if (config["use_gpu"]) {
-    bool use_gpu = config["use_gpu"].as<bool>();
-    options.sift_extraction->use_gpu = use_gpu;
-    options.sift_matching->use_gpu = use_gpu;
-  }
-  
-  // if (config["num_threads"]) {
-  //   int num_threads = config["num_threads"].as<int>();
-  //   options.sift_extraction->num_threads = num_threads;
-  //   options.sift_matching->num_threads = num_threads;
-  //   options.mapper->num_threads = num_threads;
-  // }
-  
-  // if (config["gpu_index"]) {
-  //   std::string gpu_index = config["gpu_index"].as<std::string>();
-  //   options.sift_extraction->gpu_index = gpu_index;
-  //   options.sift_matching->gpu_index = gpu_index;
-  // }
-  
-  // // 根据数据类型和质量调整配置
-  // if (config["data_type"]) {
-  //   std::string data_type = config["data_type"].as<std::string>();
-  //   StringToLower(&data_type);
-  //   if (data_type == "video") {
-  //     options.ModifyForVideoData();
-  //   } else if (data_type == "individual") {
-  //     options.ModifyForIndividualData();
-  //   } else if (data_type == "internet") {
-  //     options.ModifyForInternetData();
-  //   }
-  // }
-  
-  // if (config["quality"]) {
-  //   std::string quality = config["quality"].as<std::string>();
-  //   StringToLower(&quality);
-  //   if (quality == "low") {
-  //     options.ModifyForLowQuality();
-  //   } else if (quality == "medium") {
-  //     options.ModifyForMediumQuality();
-  //   } else if (quality == "high") {
-  //     options.ModifyForHighQuality();
-  //   } else if (quality == "extreme") {
-  //     options.ModifyForExtremeQuality();
-  //   }
-  // }
-
   // 验证配置
   if (!options.Check()) {
     std::cerr << "ERROR: 配置验证失败" << std::endl;

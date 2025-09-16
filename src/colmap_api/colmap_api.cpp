@@ -14,8 +14,8 @@ namespace colmap_api {
  * [功能描述]：实现将 AutomaticReconstructionOptions 映射到 COLMAP 并执行
  * @return [返回值说明]：0 成功，非 0 错误。
  */
-int RunAutomaticReconstructor() {
-  return AutomaticReconstructor();
+int RunAutomaticReconstructor(std::string _workspace_path) {
+  return AutomaticReconstructor(_workspace_path);
 }
 
 } // namespace colmap_api

@@ -54,7 +54,7 @@ int RunPointTriangulator(int argc, char** argv);
 int RunRigBundleAdjuster(int argc, char** argv);
 
 int RunReconstructorFromYaml(int argc, char** argv);
-int AutomaticReconstructor();
+int AutomaticReconstructor(std::string _workspace_path);
 
 }  // namespace colmap
 
