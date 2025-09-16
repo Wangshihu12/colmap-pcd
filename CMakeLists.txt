@@ -583,45 +583,45 @@ set_target_properties(
 # 安装和卸载脚本
 ################################################################################
 
-# 安装头文件
-install(DIRECTORY src/     
-        DESTINATION include/colmap
-        FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY lib/
-        DESTINATION include/colmap/lib
-        FILES_MATCHING REGEX ".*[.]h|.*[.]hpp|.*[.]inl")
+# # 安装头文件
+# install(DIRECTORY src/     
+#         DESTINATION include/colmap
+#         FILES_MATCHING PATTERN "*.h")
+# install(DIRECTORY lib/
+#         DESTINATION include/colmap/lib
+#         FILES_MATCHING REGEX ".*[.]h|.*[.]hpp|.*[.]inl")
 
-# 生成并安装CMake配置文件
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CMakeConfig.cmake.in"
-               "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfig.cmake" @ONLY)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfig.cmake"
-        DESTINATION "share/colmap")
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CMakeConfigVersion.cmake.in"
-               "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfigVersion.cmake" @ONLY)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfigVersion.cmake"
-        DESTINATION "share/colmap")
+# # 生成并安装CMake配置文件
+# configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CMakeConfig.cmake.in"
+#                "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfig.cmake" @ONLY)
+# install(FILES "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfig.cmake"
+#         DESTINATION "share/colmap")
+# configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CMakeConfigVersion.cmake.in"
+#                "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfigVersion.cmake" @ONLY)
+# install(FILES "${CMAKE_CURRENT_BINARY_DIR}/COLMAPConfigVersion.cmake"
+#         DESTINATION "share/colmap")
 
-# 安装依赖项的find_package脚本
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/cmake
-        DESTINATION share/colmap
-        FILES_MATCHING PATTERN "Find*.cmake")
+# # 安装依赖项的find_package脚本
+# install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/cmake
+#         DESTINATION share/colmap
+#         FILES_MATCHING PATTERN "Find*.cmake")
 
-# 在Windows下安装批处理脚本
-if(IS_MSVC)
-    install(FILES "scripts/shell/COLMAP.bat" "scripts/shell/RUN_TESTS.bat"
-            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                        GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-            DESTINATION "/")
-endif()
+# # 在Windows下安装批处理脚本
+# if(IS_MSVC)
+#     install(FILES "scripts/shell/COLMAP.bat" "scripts/shell/RUN_TESTS.bat"
+#             PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+#                         GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+#             DESTINATION "/")
+# endif()
 
-# 在Linux/Unix下安装应用程序菜单项
-if(UNIX AND NOT APPLE)
-    install(FILES "doc/COLMAP.desktop" DESTINATION "share/applications")
-endif()
+# # 在Linux/Unix下安装应用程序菜单项
+# if(UNIX AND NOT APPLE)
+#     install(FILES "doc/COLMAP.desktop" DESTINATION "share/applications")
+# endif()
 
-# 配置卸载脚本
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CMakeUninstall.cmake.in"
-               "${CMAKE_CURRENT_BINARY_DIR}/CMakeUninstall.cmake"
-               IMMEDIATE @ONLY)
-add_custom_target(uninstall COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/CMakeUninstall.cmake)
-set_target_properties(uninstall PROPERTIES FOLDER ${CMAKE_TARGETS_ROOT_FOLDER})
+# # 配置卸载脚本
+# configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CMakeUninstall.cmake.in"
+#                "${CMAKE_CURRENT_BINARY_DIR}/CMakeUninstall.cmake"
+#                IMMEDIATE @ONLY)
+# add_custom_target(uninstall COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/CMakeUninstall.cmake)
+# set_target_properties(uninstall PROPERTIES FOLDER ${CMAKE_TARGETS_ROOT_FOLDER})
