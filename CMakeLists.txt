@@ -29,6 +29,11 @@
 #
 # Author: Johannes L. Schoenberger (jsch-at-demuc-dot-de)
 
+# 启用 CMP0074 策略，允许使用 <PackageName>_ROOT 变量
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+
 # 设置CMake最低版本要求
 cmake_minimum_required(VERSION 3.1)
 
@@ -87,6 +92,32 @@ option(TEST_LIDAR_ENABLED "Whether to enable test images real-time display" ON)
 # API支持选项：启用COLMAP API
 option(BUILD_API "Build COLMAP API library" ON)
 
+# 新增：强制所有库使用静态链接（针对API构建）
+if(BUILD_API)
+    # 强制使用静态库
+    set(BUILD_SHARED_LIBS OFF)
+    
+    # 设置静态链接偏好
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib" ".a")
+    
+    # Windows特定：使用静态运行时库
+    if(WIN32)
+        # 修改这一行：使用动态运行时库以匹配vcpkg的static-md
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        
+        # 设置所有外部库为静态版本
+        set(Boost_USE_STATIC_LIBS ON)
+        set(Boost_USE_MULTITHREADED ON)
+        set(Boost_USE_STATIC_RUNTIME OFF)
+        
+        # 其他库的静态链接设置
+        set(CERES_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+        set(GLOG_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+        set(FLANN_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+        set(PCL_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+
 # 如果启用了测试，则启用CMake测试功能
 if(TESTS_ENABLED)
     enable_testing()
@@ -124,10 +155,11 @@ find_package(Boost REQUIRED COMPONENTS
 
 # 查找Eigen3线性代数库
 find_package(Eigen3 REQUIRED)
-# 设置Qt5路径（macOS Homebrew安装路径）
-set(Qt5_DIR /opt/homebrew/Cellar/qt@5/5.15.5_1/lib/cmake/Qt5)
+# 设置Qt6路径（macOS Homebrew安装路径）
+# set(Qt5_DIR /opt/homebrew/Cellar/qt@5/5.15.5_1/lib/cmake/Qt5)
+set(Qt6_DIR F:/Documents/qt6/msvc2019_64/lib/cmake/Qt6)
 # 查找PCL点云库
-find_package(PCL REQUIRED)
+find_package(PCL CONFIG REQUIRED)
 # 如果启用了激光雷达测试，查找OpenCV库
 if (TEST_LIDAR_ENABLED)
     find_package(OpenCV REQUIRED)
@@ -212,19 +244,20 @@ if(CUDA_ENABLED)
         endif()
     endif()
 endif()
-# GUI和Qt5配置
+# GUI和Qt6配置
 if(GUI_ENABLED)
-    # 查找Qt5库，需要Core、OpenGL和Widgets组件，最低版本5.4
-    find_package(Qt5 5.4 COMPONENTS Core OpenGL Widgets)
-    if(Qt5_FOUND)
-        message(STATUS "Found Qt")
-        message(STATUS "  Module : ${Qt5Core_DIR}")
-        message(STATUS "  Module : ${Qt5OpenGL_DIR}")
-        message(STATUS "  Module : ${Qt5Widgets_DIR}")
+    # 查找Qt6库，需要Core、OpenGL和Widgets组件，最低版本5.4
+    find_package(Qt6 6.0 COMPONENTS Core OpenGL OpenGLWidgets Widgets REQUIRED)
+    if(Qt6_FOUND)
+        message(STATUS "Found Qt6")
+        message(STATUS "  Module : ${Qt6Core_DIR}")
+        message(STATUS "  Module : ${Qt6OpenGL_DIR}")
+        message(STATUS "  Module : ${Qt6OpenGLWidgets_DIR}")
+        message(STATUS "  Module : ${Qt6Widgets_DIR}")
         # 禁用Qt关键字以避免与C++关键字冲突
         add_definitions(-DQT_NO_KEYWORDS)
     else()
-        # 如果找不到Qt5，则禁用GUI
+        # 如果找不到Qt6，则禁用GUI
         set(GUI_ENABLED OFF)
     endif()
 endif()
@@ -355,7 +388,7 @@ else()
 endif()
 
 # GUI支持配置
-if(GUI_ENABLED AND Qt5_FOUND)
+if(GUI_ENABLED AND Qt6_FOUND)
     add_definitions("-DGUI_ENABLED")
     message(STATUS "Enabling GUI support")
 else()
@@ -404,17 +437,14 @@ else()
     set(CGAL_ENABLED OFF)
 endif()
 
-# Qt5特殊配置
-if(Qt5_FOUND)
-    # Qt5是用-reduce-relocations构建的
-    if(Qt5_POSITION_INDEPENDENT_CODE)
+# Qt6特殊配置
+if(Qt6_FOUND)
+    # Qt6是用-reduce-relocations构建的
+    if(Qt6_POSITION_INDEPENDENT_CODE)
         set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-        # Ubuntu 20.04下Qt5 CMake配置错误的解决方案：https://gitlab.kitware.com/cmake/cmake/-/issues/16915
-        if(${Qt5_VERSION} VERSION_EQUAL "5.12.8" AND TARGET Qt5::Core)
-            get_property(core_options TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_OPTIONS)
-            string(REPLACE "-fPIC" "" new_qt5_core_options ${core_options})
-            set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_OPTIONS ${new_qt5_core_options})
-            set_property(TARGET Qt5::Core PROPERTY INTERFACE_POSITION_INDEPENDENT_CODE "ON")
+        # 对于Qt6，通常不需要特殊的位置无关代码处理
+        if(TARGET Qt6::Core)
+            set_property(TARGET Qt6::Core PROPERTY INTERFACE_POSITION_INDEPENDENT_CODE "ON")
             if(NOT IS_MSVC)
                 set(CMAKE_CXX_COMPILE_OPTIONS_PIE "-fPIC")
             endif()
@@ -423,6 +453,9 @@ if(Qt5_FOUND)
 
     # 启用Qt资源文件的自动编译
     set(CMAKE_AUTORCC ON)
+    # Qt6需要额外的自动化工具
+    set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTOUIC ON)
 endif()
 
 ################################################################################
@@ -452,22 +485,33 @@ set(COLMAP_LINK_DIRS
     ${Boost_LIBRARY_DIRS}        # Boost库目录
 )
 
-# 设置COLMAP外部库列表
+# 设置COLMAP外部库列表 - 分离静态和动态库
+# 可以静态链接的库
+set(COLMAP_STATIC_LIBRARIES
+    ${Boost_FILESYSTEM_LIBRARY}      # Boost文件系统库
+    ${Boost_PROGRAM_OPTIONS_LIBRARY} # Boost程序选项库
+    ${Boost_SYSTEM_LIBRARY}          # Boost系统库
+    ${GLOG_LIBRARIES}                # Google日志库
+    ${PCL_LIBRARIES}                 # PCL点云库
+    ${FLANN_LIBRARIES}               # FLANN最近邻搜索库
+    ${LZ4_LIBRARIES}                 # LZ4压缩库
+    ${METIS_LIBRARIES}               # Metis图分割库
+    ${CERES_LIBRARIES}               # Ceres求解器库
+    ${SQLite3_LIBRARIES}             # SQLite3数据库库
+    yaml-cpp                         # YAML-CPP配置文件解析库
+)
+
+# 必须保持动态链接的库
+set(COLMAP_DYNAMIC_LIBRARIES
+    ${CMAKE_DL_LIBS}                 # 动态链接库
+    ${FREEIMAGE_LIBRARIES}           # FreeImage图像处理库
+    ${OPENGL_LIBRARIES}              # OpenGL库
+)
+
+# 为了向后兼容，保持原有的COLMAP_EXTERNAL_LIBRARIES
 set(COLMAP_EXTERNAL_LIBRARIES
-    ${CMAKE_DL_LIBS}             # 动态链接库
-    ${Boost_FILESYSTEM_LIBRARY}  # Boost文件系统库
-    ${Boost_PROGRAM_OPTIONS_LIBRARY}  # Boost程序选项库
-    ${Boost_SYSTEM_LIBRARY}      # Boost系统库
-    ${GLOG_LIBRARIES}            # Google日志库
-    ${PCL_LIBRARIES}             # PCL点云库
-    ${FLANN_LIBRARIES}           # FLANN最近邻搜索库
-    ${LZ4_LIBRARIES}             # LZ4压缩库
-    ${FREEIMAGE_LIBRARIES}       # FreeImage图像处理库
-    ${METIS_LIBRARIES}           # Metis图分割库
-    ${CERES_LIBRARIES}           # Ceres求解器库
-    ${OPENGL_LIBRARIES}          # OpenGL库
-    ${SQLite3_LIBRARIES}         # SQLite3数据库库
-    yaml-cpp                     # YAML-CPP配置文件解析库
+    ${COLMAP_STATIC_LIBRARIES}
+    ${COLMAP_DYNAMIC_LIBRARIES}
 )
 
 # 如果找到OpenMP，添加到外部库列表
@@ -475,10 +519,18 @@ if(OPENMP_FOUND)
     list(APPEND COLMAP_EXTERNAL_LIBRARIES ${OpenMP_libomp_LIBRARY})
 endif()
 
-# 如果找到Qt5，添加Qt5相关库和头文件目录
-if(Qt5_FOUND)
-    list(APPEND COLMAP_INCLUDE_DIRS ${Qt5Core_INCLUDE_DIRS} ${Qt5OpenGL_INCLUDE_DIRS} ${Qt5Widgets_INCLUDE_DIRS})
-    list(APPEND COLMAP_EXTERNAL_LIBRARIES ${Qt5Core_LIBRARIES} ${Qt5OpenGL_LIBRARIES} ${Qt5Widgets_LIBRARIES})
+# 如果找到Qt6，添加Qt6相关库和头文件目录
+if(Qt6_FOUND)
+    list(APPEND COLMAP_INCLUDE_DIRS 
+        ${Qt6Core_INCLUDE_DIRS} 
+        ${Qt6OpenGL_INCLUDE_DIRS} 
+        ${Qt6OpenGLWidgets_INCLUDE_DIRS} 
+        ${Qt6Widgets_INCLUDE_DIRS})
+    list(APPEND COLMAP_EXTERNAL_LIBRARIES 
+        Qt6::Core 
+        Qt6::OpenGL 
+        Qt6::OpenGLWidgets 
+        Qt6::Widgets)
 endif()
 
 # 如果找到CGAL，添加CGAL相关库和头文件目录

@@ -47,19 +47,25 @@
 set(METIS_INCLUDE_DIR_HINTS "" CACHE PATH "Metis include directory")
 set(METIS_LIBRARY_DIR_HINTS "" CACHE PATH "Metis library directory")
 
+# 清理之前的变量
 unset(METIS_FOUND)
 unset(METIS_INCLUDE_DIRS)
 unset(METIS_LIBRARIES)
 
+# 首先尝试使用CMake的config模式查找
 find_package(metis CONFIG QUIET)
 if(TARGET metis)
     set(METIS_FOUND TRUE)
     set(METIS_LIBRARIES metis)
+    # 获取target的包含目录
+    get_target_property(METIS_INCLUDE_DIRS metis INTERFACE_INCLUDE_DIRECTORIES)
     if(METIS_FOUND)
         message(STATUS "Found Metis")
         message(STATUS "  Target : ${METIS_LIBRARIES}")
+        message(STATUS "  Includes : ${METIS_INCLUDE_DIRS}")
     endif()
 else()
+    # 如果config模式失败，使用传统查找方式
     list(APPEND METIS_CHECK_INCLUDE_DIRS
         ${METIS_INCLUDE_DIR_HINTS}
         /usr/include
@@ -92,7 +98,13 @@ else()
         PATHS
         ${METIS_CHECK_LIBRARY_DIRS})
 
-    if(METIS_FOUND)
+    # 检查是否找到了必需的组件
+    if(METIS_INCLUDE_DIRS AND METIS_LIBRARIES)
+        set(METIS_FOUND TRUE)
+        # 如果找到了GKlib，也添加到库列表中
+        if(GK_LIBRARIES)
+            list(APPEND METIS_LIBRARIES ${GK_LIBRARIES})
+        endif()
         message(STATUS "Found Metis")
         message(STATUS "  Includes : ${METIS_INCLUDE_DIRS}")
         message(STATUS "  Libraries : ${METIS_LIBRARIES}")

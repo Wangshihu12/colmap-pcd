@@ -30,6 +30,7 @@
 // Author: Johannes L. Schoenberger (jsch-at-demuc-dot-de)
 
 #include "ui/reconstruction_manager_widget.h"
+#include <algorithm>
 
 namespace colmap {
 
@@ -64,7 +65,7 @@ void ReconstructionManagerWidget::Update() {
         static_cast<int>(reconstruction_manager_->Get(i).NumRegImages()),
         static_cast<int>(reconstruction_manager_->Get(i).NumPoints3D()));
     QFontMetrics font_metrics(view()->font());
-    max_width = std::max(max_width, font_metrics.width(item));
+    max_width = std::max(max_width, font_metrics.horizontalAdvance(item));
     addItem(item);
   }
 

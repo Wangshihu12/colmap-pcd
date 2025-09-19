@@ -47,6 +47,15 @@
 set(FLANN_INCLUDE_DIR_HINTS "" CACHE PATH "FLANN include directory")
 set(FLANN_LIBRARY_DIR_HINTS "" CACHE PATH "FLANN library directory")
 
+# 在FindFLANN.cmake的第50行之前添加以下代码
+# 首先尝试使用CMake的标准find_package机制
+if(NOT FLANN_FOUND)
+    find_package(FLANN QUIET NO_MODULE)
+    if(FLANN_FOUND)
+        return()
+    endif()
+endif()
+
 unset(FLANN_FOUND)
 unset(FLANN_INCLUDE_DIRS)
 unset(FLANN_LIBRARIES)

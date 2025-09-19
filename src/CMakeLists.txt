@@ -72,6 +72,8 @@ endif()
 # 创建主要的COLMAP库
 COLMAP_ADD_LIBRARY(colmap ${COLMAP_SOURCES})
 
+target_compile_definitions(colmap PRIVATE COLMAP_BUILD_SHARED_LIBS SQLITE_API=)
+
 # 在定义colmap库的地方，确保符号可见性
 if(BUILD_SHARED_LIBS OR BUILD_API)
     # 确保内部符号对API可见

@@ -210,15 +210,17 @@ if(COLMAP_CUDA_ENABLED)
 endif()
 
 if(COLMAP_GUI_ENABLED)
-    find_package(Qt5 5.4 REQUIRED COMPONENTS Core OpenGL Widgets)
+    find_package(Qt6 6.0 REQUIRED COMPONENTS Core OpenGL OpenGLWidgets Widgets)
     list(APPEND COLMAP_EXTERNAL_LIBRARIES
-        ${Qt5Core_LIBRARIES}
-        ${Qt5OpenGL_LIBRARIES}
-        ${Qt5Widgets_LIBRARIES})
+        Qt6::Core
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        Qt6::Widgets)
     list(APPEND COLMAP_INCLUDE_DIRS
-        ${Qt5Core_INCLUDE_DIRS}
-        ${Qt5OpenGL_INCLUDE_DIRS}
-        ${Qt5Widgets_INCLUDE_DIRS})
+        ${Qt6Core_INCLUDE_DIRS}
+        ${Qt6OpenGL_INCLUDE_DIRS}
+        ${Qt6OpenGLWidgets_INCLUDE_DIRS}
+        ${Qt6Widgets_INCLUDE_DIRS})
 endif()
 
 if(COLMAP_CGAL_ENABLED)

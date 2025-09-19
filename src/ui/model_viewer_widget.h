@@ -33,6 +33,9 @@
 #define COLMAP_SRC_UI_MODEL_VIEWER_WIDGET_H_
 
 #include <QtCore>
+// Qt6兼容的头文件包含
+#include <QOpenGLWidget>
+#include <QOpenGLFunctions>
 #include <QtOpenGL>
 
 #include <QOpenGLFunctions_3_2_Core>

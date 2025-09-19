@@ -35,7 +35,12 @@
 #include <Eigen/Core>
 
 #include <QtCore>
+// Qt6兼容的头文件包含
+#include <QOpenGLWidget>
+#include <QOpenGLFunctions>
 #include <QtOpenGL>
+
+#include <QOpenGLFunctions_3_2_Core>
 
 #include "feature/types.h"
 #include "util/bitmap.h"

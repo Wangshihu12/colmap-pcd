@@ -421,8 +421,8 @@ def build_ceres_solver(args):
 def build_colmap(args):
     extra_config_args = []
     if args.qt_path != "":
-        extra_config_args.append("-DQt5_DIR={}".format(
-            os.path.join(args.qt_path, "lib/cmake/Qt5")))
+        extra_config_args.append("-DQt6_DIR={}".format(
+            os.path.join(args.qt_path, "lib/cmake/Qt6")))
 
     if args.boost_path != "":
         extra_config_args.append(
@@ -479,19 +479,20 @@ def build_post_process(args):
 
         if args.qt_path:
             copy_file_if_not_exists(
-                os.path.join(args.qt_path, "bin/Qt5Core.dll"),
-                os.path.join(args.install_path, "lib/Qt5Core.dll"))
+                os.path.join(args.qt_path, "bin/Qt6Core.dll"),
+                os.path.join(args.install_path, "lib/Qt6Core.dll"))
             copy_file_if_not_exists(
-                os.path.join(args.qt_path, "bin/Qt5Gui.dll"),
-                os.path.join(args.install_path, "lib/Qt5Gui.dll"))
+                os.path.join(args.qt_path, "bin/Qt6Gui.dll"),
+                os.path.join(args.install_path, "lib/Qt6Gui.dll"))
             copy_file_if_not_exists(
-                os.path.join(args.qt_path, "bin/Qt5Widgets.dll"),
-                os.path.join(args.install_path, "lib/Qt5Widgets.dll"))
-            mkdir_if_not_exists(
-                os.path.join(args.install_path, "lib/platforms"))
+                os.path.join(args.qt_path, "bin/Qt6Widgets.dll"),
+                os.path.join(args.install_path, "lib/Qt6Widgets.dll"))
             copy_file_if_not_exists(
-                os.path.join(args.qt_path, "plugins/platforms/qwindows.dll"),
-                os.path.join(args.install_path, "lib/platforms/qwindows.dll"))
+                os.path.join(args.qt_path, "bin/Qt6OpenGL.dll"),
+                os.path.join(args.install_path, "lib/Qt6OpenGL.dll"))
+            copy_file_if_not_exists(
+                os.path.join(args.qt_path, "bin/Qt6OpenGLWidgets.dll"),
+                os.path.join(args.install_path, "lib/Qt6OpenGLWidgets.dll"))
 
         if args.with_cuda and args.cuda_path:
             cudart_lib_path = glob.glob(os.path.join(args.cuda_path,
