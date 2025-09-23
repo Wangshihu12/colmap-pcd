@@ -3,6 +3,7 @@
 #include "opencv2/imgproc/imgproc.hpp"
 #include "omp.h"
 #include "pcd_projection.h"
+#include "base/camera_models.h"
 
 namespace colmap{
 namespace lidar{
@@ -362,8 +363,13 @@ void PcdProj::ImageMapProj(LImage& img, ImageMapType& image_map, const Camera& c
             // 考虑相机畸变影响
             Vector2d uv_ori;
             uv_ori << u_ori, v_ori; // 未畸变的像素坐标
-            Vector2d uv_dis;
-            uv_dis = DistortOpenCV(uv_ori, camera); // 应用畸变模型
+            Eigen::Vector2d uv_dis;
+            if (camera.ModelId() == PinholeCameraModel::model_id ||
+                params.size() < 8) {
+                uv_dis = uv_ori;
+            } else {
+                uv_dis = DistortOpenCV(uv_ori, camera);
+            }
 
             // 计算缩放后的像素坐标（四舍五入）
             int u0 = int(round(uv_dis(0) * depth_image_scale));
