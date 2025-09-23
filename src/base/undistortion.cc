@@ -171,7 +171,7 @@ COLMAPUndistorter::COLMAPUndistorter(const UndistortCameraOptions& options,
  */
 void COLMAPUndistorter::Run() {
   // 打印处理标题
-  PrintHeading1("Image undistortion");
+  // PrintHeading1("Image undistortion");
 
   // 创建输出目录结构
   CreateDirIfNotExists(JoinPaths(output_path_, "images"));                    // 去畸变图像输出目录
@@ -223,9 +223,9 @@ void COLMAPUndistorter::Run() {
     }
 
     // 打印处理进度信息
-    std::cout << StringPrintf("Undistorting image [%d/%d]", i + 1,
-                              futures.size())
-              << std::endl;
+    // std::cout << StringPrintf("Undistorting image [%d/%d]", i + 1,
+    //                           futures.size())
+    //           << std::endl;
 
     // 获取异步任务的结果（true表示成功，false表示失败）
     if (futures[i].get()) {
@@ -242,7 +242,7 @@ void COLMAPUndistorter::Run() {
   }
 
   // 写入去畸变后的重建结果
-  std::cout << "Writing reconstruction..." << std::endl;
+  // std::cout << "Writing reconstruction..." << std::endl;
   // 创建重建对象的副本
   Reconstruction undistorted_reconstruction = reconstruction_;
   // 对重建结果进行去畸变处理
@@ -280,8 +280,8 @@ bool COLMAPUndistorter::Undistort(const image_t image_id) const {
   // scaling is needed
   if (camera.IsUndistorted() && options_.max_image_size < 0 &&
       ExistsFile(input_image_path)) {
-    std::cout << "Undistorted image found; copying to location: "
-              << output_image_path << std::endl;
+    // std::cout << "Undistorted image found; copying to location: "
+    //           << output_image_path << std::endl;
     FileCopy(input_image_path, output_image_path, copy_type_);
     return true;
   }
