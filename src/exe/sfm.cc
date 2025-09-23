@@ -119,7 +119,7 @@ int RunReconstructorFromYaml(int argc, char** argv)
   timer.Start();
 
   // 构建配置文件路径：项目根目录下的config文件夹
-  std::string config_file = "/home/goslam/catkin_colmap-pcd/src/colmap-pcd/config/reconstruction_config.yaml";
+  std::string config_file = "F:/github/colmap-pcd/config/reconstruction_config.yaml";
 
   // 检查配置文件是否存在
   if (!ExistsFile(config_file)) {
@@ -501,7 +501,7 @@ int AutomaticReconstructor(std::string _workspace_path) {
 
   // TODO: 读取点云文件，读取相机先验位姿
   std::string lidar_pointcloud_path = JoinPaths(workspace_path, "plane_cloud.ply");
-  if (!ExistsFile(lidar_pointcloud_path)) {
+  if (ExistsFile(lidar_pointcloud_path)) {
     options.mapper->if_add_lidar_constraint = true;
     options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
   }

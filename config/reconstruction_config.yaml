@@ -1,7 +1,7 @@
 # 必需参数
-workspace_path: "/GOSLAM/Downloads/GOSLAM/RT_2025-09-08-17-37-18/Colmap"           # 工作空间路径：存储所有重建结果的文件夹路径
-image_path: "/GOSLAM/Downloads/GOSLAM/RT_2025-09-08-17-37-18/Colmap/images"                  # 图像路径：输入图像文件夹的路径
-lidar_pointcloud_path: "/GOSLAM/Downloads/GOSLAM/RT_2025-09-08-17-37-18/Colmap/plane_cloud.ply"
+workspace_path: "F:/Documents/Colmap"           # 工作空间路径：存储所有重建结果的文件夹路径
+image_path: "F:/Documents/Colmap/images"                  # 图像路径：输入图像文件夹的路径
+lidar_pointcloud_path: "F:/Documents/Colmap/plane_cloud.ply"
 
 # 可选参数
 mask_path: ""                                  # 掩码路径：图像掩码文件夹的路径（可选）
