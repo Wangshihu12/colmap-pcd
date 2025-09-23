@@ -570,9 +570,12 @@ int AutomaticReconstructor(std::string _workspace_path) {
   
   options.image_reader->single_camera = true;
   
-  bool use_gpu = false;
-  options.sift_extraction->use_gpu = use_gpu;
-  options.sift_matching->use_gpu = use_gpu;
+  // GPU模式 - 创建虚假的argc和argv参数
+  static char app_name[] = "colmap_api";  // 应用程序名称
+  static char* argv[] = {app_name, nullptr};  // 命令行参数数组，只包含程序名
+  static int argc = 1;  // 参数数量
+  
+  std::unique_ptr<QApplication> app(new QApplication(argc, argv));
   
   // 验证配置
   if (!options.Check()) {
@@ -631,9 +634,8 @@ int AutomaticReconstructor(std::string _workspace_path) {
       progress_manager.UpdateCurrentStage(processed_images);
     });
 
-    // 执行特征提取
-    feature_extractor.Start();
-    feature_extractor.Wait();
+    // 执行特征提取，使用OPENGL
+    RunThreadWithOpenGLContext(&feature_extractor);
     
     progress_manager.FinishCurrentStage();
   }
@@ -664,9 +666,8 @@ int AutomaticReconstructor(std::string _workspace_path) {
       progress_manager.UpdateCurrentStage(completed_matches);
     });
     
-    // 执行特征匹配
-    feature_matcher.Start();
-    feature_matcher.Wait();
+    // 执行特征匹配，使用OPENGL
+    RunThreadWithOpenGLContext(&feature_matcher);
     
     progress_manager.FinishCurrentStage();
   }
