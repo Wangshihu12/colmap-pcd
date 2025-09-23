@@ -2,6 +2,7 @@
 #include <pcl/io/ply_io.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/console/print.h>
 
 namespace colmap{
 namespace lidar{
@@ -11,16 +12,20 @@ const bool PointCloudProcess::Initialize(const PcdProjectionOptions& pp_options)
     kdtree_ptr_ = std::make_shared<Kdtree>();
     LidarPointcloudPtr ptr(new LidarPointcloud);
 
+    // 临时设置PCL控制台输出级别为ERROR，忽略警告信息
+    // pcl::console::print_level current_level = pcl::console::getVerbosityLevel();
+    pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
+
     if (pcl::io::loadPLYFile<LidarPoint>(path_,*ptr) == -1) {
         std::string error = "Couldn't read file " + path_;
         return false;
     }
 
-    std::cout << "Read "
-		<< ptr->width * ptr->height
-		<< " points from "
-        << path_ << std::endl;
-    std::cout << std::endl;
+    // std::cout << "Read "
+	// 	<< ptr->width * ptr->height
+	// 	<< " points from "
+    //     << path_ << std::endl;
+    // std::cout << std::endl;
     
     global_pcd_ptr_ = PointCloudDirectionTrans(ptr);
     // global_pcd_ptr_ = ptr;
