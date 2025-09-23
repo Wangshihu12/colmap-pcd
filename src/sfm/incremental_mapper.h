@@ -135,7 +135,7 @@ class IncrementalMapper {
     double filter_min_tri_angle = 1.5;
 
     // Maximum number of trials to register an image.
-    int max_reg_trials = 3;
+    int max_reg_trials = 6;
 
     // If reconstruction is provided as input, fix the existing image poses.
     bool fix_existing_images = false;

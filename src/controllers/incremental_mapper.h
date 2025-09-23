@@ -61,7 +61,7 @@ struct IncrementalMapperOptions {
   // If show correspondence of image feature points to lidar points on ui
   bool if_add_lidar_display = true;
   // Search radius in kdtree
-  double kdtree_max_search_range = 0.5; // KD树最大搜索半径(米)
+  double kdtree_max_search_range = 1.5; // KD树最大搜索半径(米)
   double kdtree_min_search_range = 0.1; // KD树最小搜索半径(米)
   double search_range_drop_speed = 0.1; // 搜索半径下降速度
   // 全局BA中的球形搜索半径(米)
@@ -100,9 +100,9 @@ struct IncrementalMapperOptions {
   bool if_save_lidar_frame = false;
   std::string lidar_frame_folder;
   // Size of the submap for cutting the lidar map
-  double submap_length = 0.5;
-  double submap_width = 0.5;
-  double submap_height = 0.5;
+  double submap_length = 1.0;
+  double submap_width = 1.0;
+  double submap_height = 1.0;
  
   // The minimum number of matches for inlier matches to be considered.
   int min_num_matches = 15;
