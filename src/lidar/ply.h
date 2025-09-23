@@ -25,7 +25,7 @@ class PointCloudProcess{
      */
     LidarPointcloudPtr PointCloudDirectionTrans(const LidarPointcloudPtr& ptr);
 
-    bool LoadDownsizedMap(double filter_size = 1.0);
+    bool LoadDownsizedMap(double filter_size = 0.5);
     LidarPointcloudPtr GetDownsizedMap();
 
     bool SearchNearestNeiborByKdtree(const Eigen::Vector3d& point_3d, Eigen::Vector6d& l_pt);
