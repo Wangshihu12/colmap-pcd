@@ -538,7 +538,7 @@ bool BundleAdjuster::Solve(Reconstruction* reconstruction) {
 
   // 如果设置了进度输出，额外打印一个换行
   if (solver_options.minimizer_progress_to_stdout) {
-    std::cout << std::endl;
+    // std::cout << std::endl;
   }
 
   // 如果设置了打印优化结果摘要
@@ -1511,7 +1511,7 @@ bool RigBundleAdjuster::Solve(Reconstruction* reconstruction,
   ceres::Solve(solver_options, problem_.get(), &summary_);
 
   if (solver_options.minimizer_progress_to_stdout) {
-    std::cout << std::endl;
+    // std::cout << std::endl;
   }
 
   if (options_.print_summary) {

@@ -9,7 +9,7 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake `
 
 cmake --build build --config release --parallel 24
 
-cmake --install . --config Release
+cmake --install build --config Release
 
 # 静态构建
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `

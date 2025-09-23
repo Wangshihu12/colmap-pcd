@@ -95,7 +95,7 @@ void BundleAdjustmentController::Run() {
 
   // 复制全局束调整选项并启用进度输出到标准输出
   BundleAdjustmentOptions ba_options = *options_.bundle_adjustment;
-  ba_options.solver_options.minimizer_progress_to_stdout = true;
+  ba_options.solver_options.minimizer_progress_to_stdout = false;
   
   // 创建迭代回调对象并添加到求解器选项中
   // 该回调可用于监控优化过程、处理用户交互或可视化

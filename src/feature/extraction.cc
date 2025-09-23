@@ -99,6 +99,9 @@ SiftFeatureExtractor::SiftFeatureExtractor(
       //image_reader_初始化
       image_reader_(reader_options_, &database_) { // 初始化图像读取器
 
+  // 注册进度回调
+  RegisterCallback(PROGRESS_CALLBACK);
+  
   // 检查输入参数的有效性
   CHECK(reader_options_.Check());
   CHECK(sift_options_.Check());
@@ -201,11 +204,20 @@ SiftFeatureExtractor::SiftFeatureExtractor(
   // 创建特征写入线程，负责将提取的特征写入数据库
   writer_ = std::make_unique<internal::FeatureWriterThread>(
       image_reader_.NumImages(), &database_, writer_queue_.get());
+
+  writer_->AddCallback(internal::FeatureWriterThread::PROGRESS_CALLBACK,
+                     [this]() { this->Callback(PROGRESS_CALLBACK); });
 }
 
+/**
+ * 特征提取主执行函数
+ * 该函数协调多线程特征提取流程，并通过回调更新进度信息
+ */
 void SiftFeatureExtractor::Run() {
-  PrintHeading1("Feature extraction");//打印标题
-
+  // 获取总图像数量，用于进度计算
+  const size_t total_images = image_reader_.NumImages();
+  
+  // 启动所有处理线程
   for (auto& resizer : resizers_) {
     resizer->Start();
   }
@@ -216,12 +228,14 @@ void SiftFeatureExtractor::Run() {
 
   writer_->Start();
 
+  // 检查所有提取线程的设置是否有效
   for (auto& extractor : extractors_) {
     if (!extractor->CheckValidSetup()) {
       return;
     }
   }
 
+  // 主图像处理循环
   while (image_reader_.NextIndex() < image_reader_.NumImages()) {
     if (IsStopped()) {
       resizer_queue_->Stop();
@@ -247,6 +261,7 @@ void SiftFeatureExtractor::Run() {
     }
   }
 
+  // 等待所有阶段完成
   resizer_queue_->Wait();
   resizer_queue_->Stop();
   for (auto& resizer : resizers_) {
@@ -262,8 +277,6 @@ void SiftFeatureExtractor::Run() {
   writer_queue_->Wait();
   writer_queue_->Stop();
   writer_->Wait();
-
-  GetTimer().PrintMinutes();
 }
 
 FeatureImporter::FeatureImporter(const ImageReaderOptions& reader_options,
@@ -507,8 +520,15 @@ void SiftFeatureExtractorThread::Run() {
 FeatureWriterThread::FeatureWriterThread(const size_t num_images,
                                          Database* database,
                                          JobQueue<ImageData>* input_queue)
-    : num_images_(num_images), database_(database), input_queue_(input_queue) {}
+    : num_images_(num_images), database_(database), input_queue_(input_queue) {
+  // 注册进度回调
+  RegisterCallback(PROGRESS_CALLBACK);
+}
 
+/**
+ * 特征写入线程的主执行函数
+ * 负责将提取的特征写入数据库，并通过回调报告进度
+ */
 void FeatureWriterThread::Run() {
   size_t image_index = 0;
   while (true) {
@@ -522,81 +542,27 @@ void FeatureWriterThread::Run() {
 
       image_index += 1;
 
-      std::cout << StringPrintf("Processed file [%d/%d]", image_index,
-                                num_images_)
-                << std::endl;
+      // 处理图像数据并写入数据库
+      if (image_data.status == ImageReader::Status::SUCCESS) {
+        DatabaseTransaction database_transaction(database_);
 
-      std::cout << StringPrintf("  Name:            %s",
-                                image_data.image.Name().c_str())
-                << std::endl;
+        if (image_data.image.ImageId() == kInvalidImageId) {
+          image_data.image.SetImageId(database_->WriteImage(image_data.image));
+        }
 
-      if (image_data.status == ImageReader::Status::IMAGE_EXISTS) {
-        std::cout << "  SKIP: Features for image already extracted."
-                  << std::endl;
-      } else if (image_data.status == ImageReader::Status::BITMAP_ERROR) {
-        std::cout << "  ERROR: Failed to read image file format." << std::endl;
-      } else if (image_data.status ==
-                 ImageReader::Status::CAMERA_SINGLE_DIM_ERROR) {
-        std::cout << "  ERROR: Single camera specified, "
-                     "but images have different dimensions."
-                  << std::endl;
-      } else if (image_data.status ==
-                 ImageReader::Status::CAMERA_EXIST_DIM_ERROR) {
-        std::cout << "  ERROR: Image previously processed, but current image "
-                     "has different dimensions."
-                  << std::endl;
-      } else if (image_data.status == ImageReader::Status::CAMERA_PARAM_ERROR) {
-        std::cout << "  ERROR: Camera has invalid parameters." << std::endl;
-      } else if (image_data.status == ImageReader::Status::FAILURE) {
-        std::cout << "  ERROR: Failed to extract features." << std::endl;
+        if (!database_->ExistsKeypoints(image_data.image.ImageId())) {
+          database_->WriteKeypoints(image_data.image.ImageId(),
+                                    image_data.keypoints);
+        }
+
+        if (!database_->ExistsDescriptors(image_data.image.ImageId())) {
+          database_->WriteDescriptors(image_data.image.ImageId(),
+                                      image_data.descriptors);
+        }
       }
 
-      if (image_data.status != ImageReader::Status::SUCCESS) {
-        continue;
-      }
-
-      std::cout << StringPrintf("  Dimensions:      %d x %d",
-                                image_data.camera.Width(),
-                                image_data.camera.Height())
-                << std::endl;
-      std::cout << StringPrintf("  Camera:          #%d - %s",
-                                image_data.camera.CameraId(),
-                                image_data.camera.ModelName().c_str())
-                << std::endl;
-      std::cout << StringPrintf("  Focal Length:    %.2fpx",
-                                image_data.camera.MeanFocalLength());
-      if (image_data.camera.HasPriorFocalLength()) {
-        std::cout << " (Prior)" << std::endl;
-      } else {
-        std::cout << std::endl;
-      }
-      if (image_data.image.HasTvecPrior()) {
-        std::cout << StringPrintf(
-                         "  GPS:             LAT=%.3f, LON=%.3f, ALT=%.3f",
-                         image_data.image.TvecPrior(0),
-                         image_data.image.TvecPrior(1),
-                         image_data.image.TvecPrior(2))
-                  << std::endl;
-      }
-      std::cout << StringPrintf("  Features:        %d",
-                                image_data.keypoints.size())
-                << std::endl;
-
-      DatabaseTransaction database_transaction(database_);
-
-      if (image_data.image.ImageId() == kInvalidImageId) {
-        image_data.image.SetImageId(database_->WriteImage(image_data.image));
-      }
-
-      if (!database_->ExistsKeypoints(image_data.image.ImageId())) {
-        database_->WriteKeypoints(image_data.image.ImageId(),
-                                  image_data.keypoints);
-      }
-
-      if (!database_->ExistsDescriptors(image_data.image.ImageId())) {
-        database_->WriteDescriptors(image_data.image.ImageId(),
-                                    image_data.descriptors);
-      }
+      // 触发进度回调，报告当前处理的图像数量
+      Callback(PROGRESS_CALLBACK);
     } else {
       break;
     }

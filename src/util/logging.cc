@@ -38,6 +38,7 @@ void InitializeGlog(char** argv) {
   google::InstallFailureSignalHandler();
 #endif
   google::InitGoogleLogging(argv[0]);
+  FLAGS_minloglevel = 3;
 }
 
 const char* __GetConstFileBaseName(const char* file) {

@@ -47,8 +47,12 @@
 #include "feature/extraction.h"     // 包含SiftFeatureExtractor的完整定义
 #include "feature/matching.h"       // 包含ExhaustiveFeatureMatcher的完整定义
 #include "controllers/incremental_mapper.h" // 包含IncrementalMapperController的完整定义
+#include "util/progress_bar.h"     // 包含进度条功能
 
 #include "base/undistortion.h"
+
+#include "util/logging.h"
+#include <mutex>
 
 #include <yaml-cpp/yaml.h>
 #include <fstream>
@@ -469,9 +473,26 @@ int RunReconstructorFromYaml(int argc, char** argv)
 }
 
 int AutomaticReconstructor(std::string _workspace_path) {
+  static std::once_flag glog_once;
+  std::call_once(glog_once, []() {
+    static char arg0[] = "colmap_api";
+    char* argv[] = {arg0, nullptr};
+    InitializeGlog(argv);   // 会自动把 FLAGS_minloglevel 设成 3
+  });
+
   // 计时
   Timer timer;
   timer.Start();
+
+  // 创建多阶段进度管理器
+  std::vector<std::string> stage_names = {
+    "特征提取",
+    "特征匹配", 
+    "增量重建",
+    "保存结果"
+  };
+  std::vector<double> stage_weights = {0.3, 0.2, 0.4, 0.1}; // 各阶段相对耗时权重
+  MultiStageProgressManager progress_manager(stage_names, stage_weights);
 
   // 创建选项管理器
   OptionManager options;
@@ -501,7 +522,7 @@ int AutomaticReconstructor(std::string _workspace_path) {
 
   // TODO: 读取点云文件，读取相机先验位姿
   std::string lidar_pointcloud_path = JoinPaths(workspace_path, "plane_cloud.ply");
-  if (!ExistsFile(lidar_pointcloud_path)) {
+  if (ExistsFile(lidar_pointcloud_path)) {
     options.mapper->if_add_lidar_constraint = true;
     options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
   }
@@ -570,10 +591,8 @@ int AutomaticReconstructor(std::string _workspace_path) {
     return EXIT_FAILURE;
   }
   
-  std::cout << "=== 开始执行重建流程 ===" << std::endl;
-  
   // 第一步：特征提取
-  std::cout << "步骤1: 特征提取..." << std::endl;
+  // progress_manager.StartStage(0, 0); // 总数将由线程自动设置
   {
     // 配置图像读取器选项
     ImageReaderOptions reader_options = *options.image_reader;
@@ -599,18 +618,27 @@ int AutomaticReconstructor(std::string _workspace_path) {
     // 创建特征提取器
     SiftFeatureExtractor feature_extractor(reader_options, *options.sift_extraction);
 
-    std::cout << "图像列表: " << reader_options.image_list.size() << std::endl;
+    // 设置进度回调 - 连接特征提取器的Writer线程回调
+    Database temp_database(database_path);
+    ImageReader temp_reader(reader_options, &temp_database);
+    const size_t total_images = temp_reader.NumImages();
+    progress_manager.StartStage(0, total_images);
+    
+    // 设置进度回调
+    size_t processed_images = 0;
+    feature_extractor.AddCallback(SiftFeatureExtractor::PROGRESS_CALLBACK, [&]() {
+      ++processed_images;
+      progress_manager.UpdateCurrentStage(processed_images);
+    });
 
     // 执行特征提取
-    // CPU模式
     feature_extractor.Start();
     feature_extractor.Wait();
     
-    std::cout << "特征提取完成" << std::endl;
+    progress_manager.FinishCurrentStage();
   }
   
   // 第二步：特征匹配
-  std::cout << "步骤2: 特征匹配..." << std::endl;
   {
     // 验证GPU参数
     if (!VerifySiftGPUParams(options.sift_matching->use_gpu)) {
@@ -618,18 +646,29 @@ int AutomaticReconstructor(std::string _workspace_path) {
       return EXIT_FAILURE;
     }
     
-    // 创建穷举特征匹配器
-    // ExhaustiveFeatureMatcher feature_matcher(*options.exhaustive_matching,
+    // 创建序列特征匹配器
     SequentialFeatureMatcher feature_matcher(*options.sequential_matching,
                                              *options.sift_matching,
                                              database_path);
     
+    // 估算匹配任务总数（基于图像数量和重叠参数）
+    Database temp_database(database_path);
+    const size_t num_images = temp_database.ReadAllImages().size();
+    const size_t total_matches = std::min(num_images, (size_t)options.sequential_matching->overlap);
+    progress_manager.StartStage(1, num_images);
+    
+    // 设置进度回调
+    size_t completed_matches = 0;
+    feature_matcher.AddCallback(SequentialFeatureMatcher::PROGRESS_CALLBACK, [&]() {
+      ++completed_matches;
+      progress_manager.UpdateCurrentStage(completed_matches);
+    });
+    
     // 执行特征匹配
-    // CPU模式
     feature_matcher.Start();
     feature_matcher.Wait();
     
-    std::cout << "特征匹配完成" << std::endl;
+    progress_manager.FinishCurrentStage();
   }
   
   // 第三步：增量重建
@@ -637,14 +676,31 @@ int AutomaticReconstructor(std::string _workspace_path) {
   // 创建重建管理器
   ReconstructionManager reconstruction_manager;
   {
+    // 获取图像总数用于进度计算
+    Database temp_database(database_path);
+    const size_t total_images = temp_database.ReadAllImages().size();
+    progress_manager.StartStage(2, total_images);
     
     // 创建增量映射器控制器
     IncrementalMapperController mapper(options.mapper.get(), image_path,
                                        database_path, &reconstruction_manager);
+
+    // 设置进度回调函数 - 在每次图像注册成功后更新进度
+    mapper.AddCallback(IncrementalMapperController::PROGRESS_CALLBACK, [&]() {
+        // 获取当前已注册的图像数量
+        if (reconstruction_manager.Size() > 0) {
+            const size_t registered_images = reconstruction_manager.Get(0).NumRegImages();
+            progress_manager.UpdateCurrentStage(registered_images, 
+                                               "正在注册图像: " + std::to_string(registered_images) + "/" + std::to_string(total_images));
+        }
+    });
     
     // 执行增量重建
     mapper.Start();
     mapper.Wait();
+
+    // 完成当前阶段进度
+    progress_manager.FinishCurrentStage();
     
     // 检查重建结果
     if (reconstruction_manager.Size() == 0) {
@@ -1394,7 +1450,7 @@ int RunRigBundleAdjuster(int argc, char** argv) {
   PrintHeading1("Rig bundle adjustment");
 
   BundleAdjustmentOptions ba_options = *options.bundle_adjustment;
-  ba_options.solver_options.minimizer_progress_to_stdout = true;
+  ba_options.solver_options.minimizer_progress_to_stdout = false;
   RigBundleAdjuster bundle_adjuster(ba_options, rig_ba_options, config);
   CHECK(bundle_adjuster.Solve(&reconstruction, &camera_rigs));
 

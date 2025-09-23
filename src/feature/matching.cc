@@ -973,13 +973,18 @@ SequentialFeatureMatcher::SequentialFeatureMatcher(
                       5 * options_.overlap),
              &database_),
       matcher_(match_options, &database_, &cache_) {
+  // 注册进度回调
+  RegisterCallback(PROGRESS_CALLBACK);
+  
   CHECK(options_.Check());
   CHECK(match_options_.Check());
 }
 
+/**
+ * 序列特征匹配主执行函数
+ * 该函数执行序列匹配和回环检测（如果启用），并通过回调报告进度
+ */
 void SequentialFeatureMatcher::Run() {
-  PrintHeading1("Sequential feature matching");
-
   if (!matcher_.Setup()) {
     return;
   }
@@ -992,8 +997,6 @@ void SequentialFeatureMatcher::Run() {
   if (options_.loop_detection) {
     RunLoopDetection(ordered_image_ids);
   }
-
-  GetTimer().PrintMinutes();
 }
 
 std::vector<image_t> SequentialFeatureMatcher::GetOrderedImageIds() const {
@@ -1019,6 +1022,11 @@ std::vector<image_t> SequentialFeatureMatcher::GetOrderedImageIds() const {
   return ordered_image_ids;
 }
 
+/**
+ * 执行序列特征匹配
+ * 为每张图像与其邻近图像进行特征匹配，并通过回调报告进度
+ * @param image_ids 有序的图像ID列表
+ */
 void SequentialFeatureMatcher::RunSequentialMatching(
     const std::vector<image_t>& image_ids) {
   std::vector<std::pair<image_t, image_t>> image_pairs;
@@ -1031,13 +1039,7 @@ void SequentialFeatureMatcher::RunSequentialMatching(
 
     const auto image_id1 = image_ids.at(image_idx1);
 
-    Timer timer;
-    timer.Start();
-
-    std::cout << StringPrintf("Matching image [%d/%d]", image_idx1 + 1,
-                              image_ids.size())
-              << std::flush;
-
+    // 构建当前图像的匹配对
     image_pairs.clear();
     for (int i = 0; i < options_.overlap; ++i) {
       const size_t image_idx2 = image_idx1 + i;
@@ -1055,10 +1057,12 @@ void SequentialFeatureMatcher::RunSequentialMatching(
       }
     }
 
+    // 执行匹配
     DatabaseTransaction database_transaction(&database_);
     matcher_.Match(image_pairs);
 
-    PrintElapsedTime(timer);
+    // 报告进度
+    Callback(PROGRESS_CALLBACK);
   }
 }
 

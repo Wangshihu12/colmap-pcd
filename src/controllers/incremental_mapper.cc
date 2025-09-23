@@ -38,11 +38,8 @@ namespace {
 
 size_t TriangulateImage(const IncrementalMapperOptions& options,
                         const Image& image, IncrementalMapper* mapper) {
-  std::cout << "  => Continued observations: " << image.NumPoints3D()
-            << std::endl;
   const size_t num_tris =
       mapper->TriangulateImage(options.Triangulation(), image.ImageId());
-  std::cout << "  => Added observations: " << num_tris << std::endl;
   return num_tris;
 }
 
@@ -76,7 +73,7 @@ void AdjustGlobalBundle(const IncrementalMapperOptions& options,
   }
 
   // 打印全局束调整开始的标题
-  PrintHeading1("Global bundle adjustment");
+  // PrintHeading1("Global bundle adjustment");
 
   // 根据配置选择合适的全局束调整方法
   if (options.if_add_lidar_constraint) {
@@ -112,12 +109,6 @@ void IterativeLocalRefinement(const IncrementalMapperOptions& options,
     const auto report = mapper->AdjustLocalBundle(
         options.Mapper(), ba_options, options.Triangulation(), image_id,
         mapper->GetModifiedPoints3D());
-    std::cout << "  => Merged observations: " << report.num_merged_observations
-              << std::endl;
-    std::cout << "  => Completed observations: "
-              << report.num_completed_observations << std::endl;
-    std::cout << "  => Filtered observations: "
-              << report.num_filtered_observations << std::endl;
     const double changed =
         report.num_adjusted_observations == 0
             ? 0
@@ -125,8 +116,6 @@ void IterativeLocalRefinement(const IncrementalMapperOptions& options,
                report.num_completed_observations +
                report.num_filtered_observations) /
                   static_cast<double>(report.num_adjusted_observations);
-    std::cout << StringPrintf("  => Changed observations: %.6f", changed)
-              << std::endl;
     if (changed < options.ba_local_max_refinement_change) {
       break;
     }
@@ -150,7 +139,7 @@ void IterativeLocalRefinement(const IncrementalMapperOptions& options,
 void IterativeGlobalRefinement(const IncrementalMapperOptions& options,
                                IncrementalMapper* mapper) {
   // 打印重三角化阶段标题
-  PrintHeading1("Retriangulation");
+  // PrintHeading1("Retriangulation");
 
   // 先执行一次轨迹完成和合并操作
   // 这将尝试为未三角化的特征点创建3D点，并合并重复的3D点轨迹
@@ -158,8 +147,7 @@ void IterativeGlobalRefinement(const IncrementalMapperOptions& options,
 
   // 执行重三角化，尝试改进现有3D点的位置或重建失败的点
   // 并输出成功重三角化的观测数量
-  std::cout << "  => Retriangulated observations: "
-            << mapper->Retriangulate(options.Triangulation()) << std::endl;
+  mapper->Retriangulate(options.Triangulation());
 
   // 执行多轮迭代优化，直到达到最大迭代次数或收敛
   for (int i = 0; i < options.ba_global_max_refinements; ++i) {
@@ -188,8 +176,6 @@ void IterativeGlobalRefinement(const IncrementalMapperOptions& options,
             : static_cast<double>(num_changed_observations) / num_observations;
 
     // 输出本轮迭代的变化率
-    std::cout << StringPrintf("  => Changed observations: %.6f", changed)
-              << std::endl;
 
     // 如果变化率低于阈值，认为已收敛，提前结束迭代
     if (changed < options.ba_global_max_refinement_change) {
@@ -205,10 +191,10 @@ void IterativeGlobalRefinement(const IncrementalMapperOptions& options,
 void ExtractColors(const std::string& image_path, const image_t image_id,
                    Reconstruction* reconstruction) {
   if (!reconstruction->ExtractColorsForImage(image_id, image_path)) {
-    std::cout << StringPrintf("WARNING: Could not read image %s at path %s.",
-                              reconstruction->Image(image_id).Name().c_str(),
-                              image_path.c_str())
-              << std::endl;
+    // std::cout << StringPrintf("WARNING: Could not read image %s at path %s.",
+    //                           reconstruction->Image(image_id).Name().c_str(),
+    //                           image_path.c_str())
+    //           << std::endl;
   }
 }
 
@@ -234,15 +220,12 @@ size_t FilterPoints(const IncrementalMapperOptions& options,
                     IncrementalMapper* mapper) {
   const size_t num_filtered_observations =
       mapper->FilterPoints(options.Mapper());
-  std::cout << "  => Filtered observations: " << num_filtered_observations
-            << std::endl;
   return num_filtered_observations;
 }
 
 size_t FilterImages(const IncrementalMapperOptions& options,
                     IncrementalMapper* mapper) {
   const size_t num_filtered_images = mapper->FilterImages(options.Mapper());
-  std::cout << "  => Filtered images: " << num_filtered_images << std::endl;
   return num_filtered_images;
 }
 
@@ -250,12 +233,8 @@ size_t CompleteAndMergeTracks(const IncrementalMapperOptions& options,
                               IncrementalMapper* mapper) {
   const size_t num_completed_observations =
       mapper->CompleteTracks(options.Triangulation());
-  std::cout << "  => Completed observations: " << num_completed_observations
-            << std::endl;
   const size_t num_merged_observations =
       mapper->MergeTracks(options.Triangulation());
-  std::cout << "  => Merged observations: " << num_merged_observations
-            << std::endl;
   return num_completed_observations + num_merged_observations;
 }
 
@@ -322,7 +301,7 @@ BundleAdjustmentOptions IncrementalMapperOptions::LocalBundleAdjustment()
 #if CERES_VERSION_MAJOR < 2
   options.solver_options.num_linear_solver_threads = num_threads;
 #endif  // CERES_VERSION_MAJOR
-  options.print_summary = true;
+  options.print_summary = false;
   options.refine_focal_length = ba_refine_focal_length;
   options.refine_principal_point = ba_refine_principal_point;
   options.refine_extra_params = ba_refine_extra_params;
@@ -363,12 +342,12 @@ BundleAdjustmentOptions IncrementalMapperOptions::GlobalBundleAdjustment()
   options.solver_options.parameter_tolerance = 0.0;
   options.solver_options.max_num_iterations = ba_global_max_num_iterations;
   options.solver_options.max_linear_solver_iterations = 100;
-  options.solver_options.minimizer_progress_to_stdout = true;
+  options.solver_options.minimizer_progress_to_stdout = false;
   options.solver_options.num_threads = num_threads;
 #if CERES_VERSION_MAJOR < 2
   options.solver_options.num_linear_solver_threads = num_threads;
 #endif  // CERES_VERSION_MAJOR
-  options.print_summary = true;
+  options.print_summary = false;
   options.refine_focal_length = ba_refine_focal_length;
   options.refine_principal_point = ba_refine_principal_point;
   options.refine_extra_params = ba_refine_extra_params;
@@ -384,7 +363,7 @@ ParallelBundleAdjuster::Options
 IncrementalMapperOptions::ParallelGlobalBundleAdjustment() const {
   ParallelBundleAdjuster::Options options;
   options.max_num_iterations = ba_global_max_num_iterations;
-  options.print_summary = true;
+  options.print_summary = false;
   options.gpu_index = ba_global_pba_gpu_index;
   options.num_threads = num_threads;
   options.min_num_residuals_for_multi_threading =
@@ -431,6 +410,7 @@ IncrementalMapperController::IncrementalMapperController(
   RegisterCallback(INITIAL_IMAGE_PAIR_REG_CALLBACK);
   RegisterCallback(NEXT_IMAGE_REG_CALLBACK);
   RegisterCallback(LAST_IMAGE_REG_CALLBACK);
+  RegisterCallback(PROGRESS_CALLBACK);
 }
 
 /**
@@ -472,7 +452,6 @@ void IncrementalMapperController::Run() {
 
     // 第一次放宽：减少所需的内点数量
     // 这降低了图像对初始化时所需匹配点的数量门槛
-    std::cout << "  => Relaxing the initialization constraints." << std::endl;
     init_mapper_options.init_min_num_inliers /= 2; // 将最小内点数减半
     Reconstruct(init_mapper_options); // 使用新参数再次尝试重建
 
@@ -483,13 +462,9 @@ void IncrementalMapperController::Run() {
 
     // 第二次放宽：减小三角化所需的最小角度
     // 这允许在视差较小的情况下也能初始化重建
-    std::cout << "  => Relaxing the initialization constraints." << std::endl;
     init_mapper_options.init_min_tri_angle /= 2; // 将最小三角化角度减半
     Reconstruct(init_mapper_options); // 使用新参数再次尝试重建
   }
-
-  // 打印整个重建过程的耗时（分钟为单位）
-  GetTimer().PrintMinutes();
 }
 
 /**
@@ -654,12 +629,10 @@ void IncrementalMapperController::Reconstruct(
 
       // 如果没有指定初始图像对，自动寻找合适的初始对
       if (options_->init_image_id1 == -1 || options_->init_image_id2 == -1) {
-        PrintHeading1("Finding good initial image pair");
         const bool find_init_success = mapper.FindInitialImagePair(
             init_mapper_options, &image_id1, &image_id2);
         // 如果找不到好的初始图像对，放弃当前尝试
         if (!find_init_success) {
-          std::cout << "  => No good initial image pair found." << std::endl;
           mapper.EndReconstruction(kDiscardReconstruction);
           reconstruction_manager_->Delete(reconstruction_idx);
           break;
@@ -668,19 +641,11 @@ void IncrementalMapperController::Reconstruct(
         // 检查用户指定的初始图像对是否存在
         if (!reconstruction.ExistsImage(image_id1) ||
             !reconstruction.ExistsImage(image_id2)) {
-          std::cout << StringPrintf(
-                           "  => Initial image pair #%d and #%d do not exist.",
-                           image_id1, image_id2)
-                    << std::endl;
           mapper.EndReconstruction(kDiscardReconstruction);
           reconstruction_manager_->Delete(reconstruction_idx);
           return;
         }
       }
-
-      // 开始使用选定的初始图像对初始化重建
-      PrintHeading1(StringPrintf("Initializing with image pair #%d and #%d",
-                                 image_id1, image_id2));
       // input: IncrementalMapper::Options init_mapper_options
       // input: initial image pair
 
@@ -696,14 +661,8 @@ void IncrementalMapperController::Reconstruct(
             init_mapper_options, image_id1, image_id2);
       } 
           
-      // 初始化失败，提供可能的解决方案
+      // 初始化失败
       if (!reg_init_success) {
-        std::cout << "  => Initialization failed - possible solutions:"
-                  << std::endl
-                  << "     - try to relax the initialization constraints"
-                  << std::endl
-                  << "     - manually select an initial image pair"
-                  << std::endl;
         mapper.EndReconstruction(kDiscardReconstruction);
         reconstruction_manager_->Delete(reconstruction_idx);
         break;
@@ -765,7 +724,6 @@ void IncrementalMapperController::Reconstruct(
 
       // 如果没有更多图像可注册，结束增量式重建
       if (next_images.empty()) {
-        std::cout << "  => 没有更多的图像可注册." << std::endl;
         break;
       }
 
@@ -773,15 +731,6 @@ void IncrementalMapperController::Reconstruct(
       for (size_t reg_trial = 0; reg_trial < next_images.size(); ++reg_trial) {
         const image_t next_image_id = next_images[reg_trial];
         const Image& next_image = reconstruction.Image(next_image_id);
-
-        PrintHeading1(StringPrintf("Registering image #%d (%d)", next_image_id,
-                                   reconstruction.NumRegImages() + 1));
-
-        // 显示该图像能看到多少已重建的3D点
-        std::cout << StringPrintf("  => Image sees %d / %d points",
-                                  next_image.NumVisiblePoints3D(),
-                                  next_image.NumObservations())
-                  << std::endl;
 
         // 注册下一张图像
         reg_next_success =
@@ -831,13 +780,13 @@ void IncrementalMapperController::Reconstruct(
 
           // 触发图像注册成功的回调
           Callback(NEXT_IMAGE_REG_CALLBACK);
+          // 触发进度更新回调
+          Callback(PROGRESS_CALLBACK);
 
           // 成功注册一张图像后，退出当前尝试循环
           break;
         } else {
           // 注册失败，尝试下一张候选图像
-          std::cout << "  => Could not register, trying another image."
-                    << std::endl;
 
           // 如果初始阶段长时间无法继续注册新图像，考虑放弃当前初始对
           const size_t kMinNumInitialRegTrials = 30;
@@ -854,7 +803,6 @@ void IncrementalMapperController::Reconstruct(
       const size_t max_model_overlap =
           static_cast<size_t>(options_->max_model_overlap);
       if (mapper.NumSharedRegImages() >= max_model_overlap) {
-        std::cout << "  => 重叠图像数量过多，停止当前模型的重建." << std::endl;
         break;
       }
 
@@ -872,7 +820,6 @@ void IncrementalMapperController::Reconstruct(
 
     // 如果收到停止信号，结束当前重建但不丢弃结果
     if (IsStopped()) {
-      std::cout << "  => 收到停止信号，结束当前重建但不丢弃结果." << std::endl;
       const bool kDiscardReconstruction = false;
       mapper.EndReconstruction(kDiscardReconstruction);
       break;

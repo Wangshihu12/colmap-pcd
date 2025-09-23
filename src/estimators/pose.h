@@ -95,7 +95,7 @@ struct AbsolutePoseRefinementOptions {
   bool refine_extra_params = true;
 
   // Whether to print final summary.
-  bool print_summary = true;
+  bool print_summary = false;
 
   void Check() const {
     CHECK_GE(gradient_tolerance, 0.0);

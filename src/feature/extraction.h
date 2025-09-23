@@ -36,6 +36,7 @@
 #include "base/image_reader.h"
 #include "feature/sift.h"
 #include "util/opengl_utils.h"
+#include "util/progress_bar.h"
 #include "util/threading.h"
 
 namespace colmap {
@@ -49,6 +50,10 @@ struct ImageData;
 // Feature extraction class to extract features for all images in a directory.
 class SiftFeatureExtractor : public Thread {
  public:
+  enum {
+    PROGRESS_CALLBACK,  // 进度更新回调
+  };
+  
   SiftFeatureExtractor(const ImageReaderOptions& reader_options,
                        const SiftExtractionOptions& sift_options);
 
@@ -137,6 +142,10 @@ class SiftFeatureExtractorThread : public Thread {
 
 class FeatureWriterThread : public Thread {
  public:
+  enum {
+    PROGRESS_CALLBACK,  // 进度更新回调
+  };
+  
   FeatureWriterThread(const size_t num_images, Database* database,
                       JobQueue<ImageData>* input_queue);
 

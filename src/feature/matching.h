@@ -434,6 +434,10 @@ class ExhaustiveFeatureMatcher : public Thread {
 // and perform matching and verification.
 class SequentialFeatureMatcher : public Thread {
  public:
+  enum {
+    PROGRESS_CALLBACK,  // 进度更新回调
+  };
+  
   SequentialFeatureMatcher(const SequentialMatchingOptions& options,
                            const SiftMatchingOptions& match_options,
                            const std::string& database_path);

@@ -239,6 +239,7 @@ class IncrementalMapperController : public Thread {
     INITIAL_IMAGE_PAIR_REG_CALLBACK,
     NEXT_IMAGE_REG_CALLBACK,
     LAST_IMAGE_REG_CALLBACK,
+    PROGRESS_CALLBACK,  // 进度更新回调
   };
 
   IncrementalMapperController(IncrementalMapperOptions* options,

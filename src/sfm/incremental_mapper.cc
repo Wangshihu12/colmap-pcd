@@ -1017,7 +1017,6 @@ IncrementalMapper::AdjustLocalBundle(
   // 查找与当前图像共享最多3D点的相关图像集合
   const std::vector<image_t> local_bundle = FindLocalBundle(options, image_id);
 
-  std::cout<<std::endl;
   // 只有当找到相关图像时才执行束调整
   if (local_bundle.size() > 0) {
     // 创建束调整配置对象
