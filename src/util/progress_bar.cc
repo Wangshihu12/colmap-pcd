@@ -64,7 +64,7 @@ void ConsoleProgressBar::Finish(const std::string& message) {
   if (!message.empty()) {
     std::cout << message;
   } else {
-    std::cout << "完成";
+    // std::cout << "完成";
   }
   std::cout << std::endl;
 }

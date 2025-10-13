@@ -723,7 +723,7 @@ int AutomaticReconstructor(std::string _workspace_path) {
   }
 
   // 第四步：全局BA
-  std::cout << "步骤4: 全局BA..." << std::endl;
+  // std::cout << "步骤4: 全局BA..." << std::endl;
   if (false)
   {
     std::string input_path;
@@ -748,7 +748,7 @@ int AutomaticReconstructor(std::string _workspace_path) {
   }
 
   // 第五步：保存结果
-  std::cout << "步骤5: 保存结果..." << std::endl;
+  std::cout << "步骤4: 保存结果..." << std::endl;
   {
     std::string output_path;
     output_path = JoinPaths(workspace_path, "colmap");
