@@ -15,7 +15,29 @@ namespace colmap_api {
  * @return [返回值说明]：0 成功，非 0 错误。
  */
 int RunAutomaticReconstructor(std::string _workspace_path) {
-  return AutomaticReconstructor(_workspace_path);
+  return AutomaticReconstructor(_workspace_path, nullptr);
+}
+
+/**
+ * [功能描述]：运行自动重建（带进度回调）
+ * @param _workspace_path：工作空间路径
+ * @param callback：进度回调函数
+ * @return 0 成功，非 0 错误，-1 用户取消
+ */
+ int RunAutomaticReconstructorWithCallback(std::string _workspace_path, ReconstructionProgressCallback callback) {
+  return AutomaticReconstructor(_workspace_path, callback);
+}
+
+double GetReconstructionProgress() {
+  return GetReconstructionProgress();
+}
+
+bool IsReconstructionRunning() {
+  return IsReconstructionRunning();
+}
+
+void ResetReconstructionProgress() {
+  ResetReconstructionProgress();
 }
 
 } // namespace colmap_api

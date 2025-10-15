@@ -34,8 +34,13 @@
 
 #include "base/reconstruction.h"
 #include "controllers/incremental_mapper.h"
+#include <functional>
+#include <string>
 
 namespace colmap {
+
+// 进度回调函数类型定义
+using ReconstructionProgressCallback = std::function<bool(double progress, const std::string& stage_name, bool is_finished)>;
 
 int RunPointTriangulatorImpl(Reconstruction& reconstruction,
                              const std::string database_path,
@@ -54,7 +59,25 @@ int RunPointTriangulator(int argc, char** argv);
 int RunRigBundleAdjuster(int argc, char** argv);
 
 int RunReconstructorFromYaml(int argc, char** argv);
-int AutomaticReconstructor(std::string _workspace_path);
+/**
+ * [功能描述]：自动重建函数（支持进度回调）
+ * @param _workspace_path：工作空间路径
+ * @param callback：进度回调函数（可选，传nullptr表示不使用回调）
+ * @return 0 成功，非 0 错误，-1 用户取消
+ */
+ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCallback callback);
+
+/**
+ * [功能描述]：获取当前重建进度百分比
+ * @return 进度值（0.0-100.0）
+ */
+double GetReconstructionProgress();
+
+// 检查重建是否正在运行
+bool IsReconstructionRunning();
+
+ // 重置进度状态（开始新的重建前调用）
+void ResetReconstructionProgress();
 
 }  // namespace colmap
 

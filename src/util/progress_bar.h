@@ -105,13 +105,21 @@ class MultiStageProgressManager {
    */
   ProgressCallback GetCurrentStageCallback();
 
+  /**
+   * 获取当前总体进度百分比
+   * @return 进度值（0.0-100.0）
+   */
+   double GetOverallProgress() const;
+
  private:
   std::vector<std::string> stage_names_;    // 阶段名称
   std::vector<double> stage_weights_;       // 阶段权重
   size_t current_stage_;                    // 当前阶段索引
   size_t current_stage_total_;              // 当前阶段总项目数
   ConsoleProgressBar progress_bar_;         // 进度条显示器
-  std::mutex mutex_;                        // 线程安全保护
+  mutable std::mutex mutex_;                        // 线程安全保护
+
+  size_t current_progress_ = 0;  // 添加：当前阶段的进度值
 };
 
 }  // namespace colmap

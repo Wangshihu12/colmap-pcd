@@ -472,7 +472,38 @@ int RunReconstructorFromYaml(int argc, char** argv)
   return EXIT_SUCCESS;
 }
 
-int AutomaticReconstructor(std::string _workspace_path) {
+// 全局进度管理器指针和进度状态
+static MultiStageProgressManager* g_progress_manager = nullptr;
+static std::mutex g_progress_mutex;
+static double g_last_progress = 0.0;  // 保存最后的进度值
+static bool g_is_running = false;     // 重建是否正在运行
+
+// 获取重建进度的函数
+double GetReconstructionProgress() {
+  std::lock_guard<std::mutex> lock(g_progress_mutex);
+  if (g_progress_manager) {
+    g_last_progress = g_progress_manager->GetOverallProgress();
+    return g_last_progress;
+  }
+  // 如果没有活跃的进度管理器，返回上次保存的进度值
+  return g_last_progress;
+}
+
+// 检查重建是否正在运行
+bool IsReconstructionRunning() {
+  std::lock_guard<std::mutex> lock(g_progress_mutex);
+  return g_is_running;
+}
+
+// 重置进度状态（开始新的重建前调用）
+void ResetReconstructionProgress() {
+  std::lock_guard<std::mutex> lock(g_progress_mutex);
+  g_last_progress = 0.0;
+  g_is_running = false;
+  g_progress_manager = nullptr;
+}
+
+int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCallback callback) {
   static std::once_flag glog_once;
   std::call_once(glog_once, []() {
     static char arg0[] = "colmap_api";
@@ -488,11 +519,18 @@ int AutomaticReconstructor(std::string _workspace_path) {
   std::vector<std::string> stage_names = {
     "特征提取",
     "特征匹配", 
-    "增量重建",
-    "保存结果"
+    "增量重建"
   };
-  std::vector<double> stage_weights = {0.3, 0.2, 0.4, 0.1}; // 各阶段相对耗时权重
+  std::vector<double> stage_weights = {0.2, 0.3, 0.5}; // 各阶段相对耗时权重
   MultiStageProgressManager progress_manager(stage_names, stage_weights);
+
+  // 设置全局指针和运行状态
+  {
+    std::lock_guard<std::mutex> lock(g_progress_mutex);
+    g_progress_manager = &progress_manager;
+    g_is_running = true;
+    g_last_progress = 0.0;
+  }
 
   // 创建选项管理器
   OptionManager options;
@@ -575,7 +613,14 @@ int AutomaticReconstructor(std::string _workspace_path) {
   static char* argv[] = {app_name, nullptr};  // 命令行参数数组，只包含程序名
   static int argc = 1;  // 参数数量
   
-  std::unique_ptr<QApplication> app(new QApplication(argc, argv));
+  // 检查是否已经存在QApplication实例
+  // 如果桌面端软件已经创建了QApplication，就不需要再创建新的
+  std::unique_ptr<QApplication> app;
+  if (!QApplication::instance()) {
+    // 只有在不存在QApplication实例时才创建新的
+    std::cout << "创建QApplication实例..." << std::endl;
+    app.reset(new QApplication(argc, argv));
+  }
   
   // 验证配置
   if (!options.Check()) {
@@ -632,6 +677,11 @@ int AutomaticReconstructor(std::string _workspace_path) {
     feature_extractor.AddCallback(SiftFeatureExtractor::PROGRESS_CALLBACK, [&]() {
       ++processed_images;
       progress_manager.UpdateCurrentStage(processed_images);
+
+      if (callback != nullptr) {
+        double progress = g_progress_manager->GetOverallProgress();
+        callback(progress, "特征提取", false);
+      }
     });
 
     // 执行特征提取，使用OPENGL
@@ -664,6 +714,11 @@ int AutomaticReconstructor(std::string _workspace_path) {
     feature_matcher.AddCallback(SequentialFeatureMatcher::PROGRESS_CALLBACK, [&]() {
       ++completed_matches;
       progress_manager.UpdateCurrentStage(completed_matches);
+
+      if (callback != nullptr) {
+        double progress = g_progress_manager->GetOverallProgress();
+        callback(progress, "特征匹配", false);
+      }
     });
     
     // 执行特征匹配，使用OPENGL
@@ -693,6 +748,11 @@ int AutomaticReconstructor(std::string _workspace_path) {
             const size_t registered_images = reconstruction_manager.Get(0).NumRegImages();
             progress_manager.UpdateCurrentStage(registered_images, 
                                                "正在注册图像: " + std::to_string(registered_images) + "/" + std::to_string(total_images));
+        }
+
+        if (callback != nullptr) {
+          double progress = g_progress_manager->GetOverallProgress();
+          callback(progress, "增量重建", false);
         }
     });
     
@@ -784,6 +844,15 @@ int AutomaticReconstructor(std::string _workspace_path) {
   
   std::cout << "=== 重建流程完成 ===" << std::endl;
   timer.PrintMinutes();
+
+  // 清除全局指针，但保留进度值
+  {
+    std::lock_guard<std::mutex> lock(g_progress_mutex);
+    g_progress_manager = nullptr;
+    g_is_running = false;
+    // 不清除 g_last_progress，保持最终状态
+  }
+
   return EXIT_SUCCESS;
 }
 

@@ -152,6 +152,8 @@ void MultiStageProgressManager::UpdateCurrentStage(size_t current, const std::st
   if (current_stage_ >= stage_names_.size()) {
     return;
   }
+
+  current_progress_ = current;  // 保存当前进度
   
   std::string full_message = message.empty() ? stage_names_[current_stage_] : message;
   progress_bar_.Update(current, current_stage_total_, full_message);
@@ -177,6 +179,36 @@ ProgressCallback MultiStageProgressManager::GetCurrentStageCallback() {
     }
     UpdateCurrentStage(current, message);
   };
+}
+
+// 添加新方法：计算总体进度百分比
+double MultiStageProgressManager::GetOverallProgress() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  
+  // 计算总权重
+  double total_weight = 0.0;
+  for (const auto& weight : stage_weights_) {
+    total_weight += weight;
+  }
+  
+  if (total_weight == 0.0) {
+    return 0.0;
+  }
+  
+  // 计算已完成阶段的累计权重
+  double completed_weight = 0.0;
+  for (size_t i = 0; i < current_stage_ && i < stage_weights_.size(); ++i) {
+    completed_weight += stage_weights_[i];
+  }
+  
+  // 加上当前阶段的部分进度权重
+  if (current_stage_ < stage_weights_.size() && current_stage_total_ > 0) {
+    double current_stage_progress = static_cast<double>(current_progress_) / current_stage_total_;
+    completed_weight += stage_weights_[current_stage_] * current_stage_progress;
+  }
+  
+  // 返回百分比（0-100）
+  return (completed_weight / total_weight) * 100.0;
 }
 
 }  // namespace colmap
