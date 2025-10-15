@@ -934,6 +934,127 @@ void Reconstruction::Read(const std::string& path) {
   }
 }
 
+/**
+ * [功能描述]：将数据写入pre.dat二进制文件
+ * 按照COLMAP二进制格式写入相机参数、图像位姿和3D点云数据
+ * 
+ * @param filename：输出文件路径，例如 "pre.dat"
+ * @param cameras：相机参数向量，包含所有相机的内参信息
+ * @param images：图像位姿向量，包含所有图像的外参信息
+ * @param points：3D点云向量，包含所有3D点的坐标和颜色
+ * @return bool：成功返回true，失败返回false
+ */
+bool Reconstruction::WriteBinaryFile(const std::string& filename) {
+    
+    // 以二进制写入模式打开文件
+    std::ofstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    // ============ 第一部分：写入相机参数 ============
+    // 计算相机参数总数：每个相机7个参数
+    int32_t camera_params_count = static_cast<int32_t>(cameras_.size() * 7);
+    
+    // 写入相机参数总数（4字节有符号整数）
+    file.write(reinterpret_cast<const char*>(&camera_params_count), sizeof(int32_t));
+    
+    // 遍历所有相机，写入每个相机的参数
+    for (const auto& cam : cameras_) {
+        // 写入相机ID（需要先转换为double）
+        double cam_id_double = static_cast<double>(cam.first);
+        file.write(reinterpret_cast<const char*>(&cam_id_double), sizeof(double));
+        
+        // 写入图像宽度
+        double width = static_cast<double>(cam.second.Width());
+        file.write(reinterpret_cast<const char*>(&width), sizeof(double));
+        
+        // 写入图像高度
+        double height = static_cast<double>(cam.second.Height());
+        file.write(reinterpret_cast<const char*>(&height), sizeof(double));
+        
+        // 写入相机内参：fx, fy, cx, cy
+        for (const double param : cam.second.Params()) {
+          file.write(reinterpret_cast<const char*>(&param), sizeof(double));
+        }
+    }
+
+    // ============ 第二部分：写入图像位姿信息 ============
+    // 计算图像参数总数：每张图像9个参数
+    int32_t image_params_count = static_cast<int32_t>(reg_image_ids_.size() * 9);
+    
+    // 写入图像参数总数（4字节有符号整数）
+    file.write(reinterpret_cast<const char*>(&image_params_count), sizeof(int32_t));
+    
+    // 遍历所有图像，写入每张图像的位姿
+    for (const auto& img : images_) {
+        if (!img.second.IsRegistered()) {
+          continue;
+        }
+        // 获取图像名称并去掉后缀，然后转换为数字
+        std::string image_name_with_ext = img.second.Name();
+        std::string image_name_no_ext;
+        std::string ext;
+        SplitFileExtension(image_name_with_ext, &image_name_no_ext, &ext);
+        // 写入图像ID（需要先转换为double）
+        double img_id_double = std::stod(image_name_no_ext);
+        file.write(reinterpret_cast<const char*>(&img_id_double), sizeof(double));
+        
+        // 写入四元数旋转（qw, qx, qy, qz）
+        const Eigen::Vector4d normalized_qvec = NormalizeQuaternion(img.second.Qvec());
+        file.write(reinterpret_cast<const char*>(&normalized_qvec(0)), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&normalized_qvec(1)), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&normalized_qvec(2)), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&normalized_qvec(3)), sizeof(double));
+        
+        // 写入平移向量（tx, ty, tz）
+        double tx = static_cast<double>(img.second.Tvec(0));
+        double ty = static_cast<double>(img.second.Tvec(1));
+        double tz = static_cast<double>(img.second.Tvec(2));
+        file.write(reinterpret_cast<const char*>(&tx), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&ty), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&tz), sizeof(double));
+        
+        // 写入关联的相机ID（需要先转换为double）
+        double cam_id_double = static_cast<double>(img.second.CameraId());
+        file.write(reinterpret_cast<const char*>(&cam_id_double), sizeof(double));
+    }
+
+    // ============ 第三部分：写入3D点云数据 ============
+    // 计算点云参数总数：每个点7个参数
+    int32_t point_params_count = static_cast<int32_t>(points3D_.size() * 7);
+    
+    // 写入点云参数总数（4字节有符号整数）
+    file.write(reinterpret_cast<const char*>(&point_params_count), sizeof(int32_t));
+    
+    // 遍历所有3D点，写入每个点的坐标和颜色
+    for (const auto& pt : points3D_) {
+        // 写入点ID（需要先转换为double）
+        double pt_id_double = static_cast<double>(pt.first);
+        file.write(reinterpret_cast<const char*>(&pt_id_double), sizeof(double));
+        
+        // 写入3D坐标（x, y, z）
+        double x = static_cast<double>(pt.second.XYZ()(0));
+        double y = static_cast<double>(pt.second.XYZ()(1));
+        double z = static_cast<double>(pt.second.XYZ()(2));
+        file.write(reinterpret_cast<const char*>(&x), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&y), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&z), sizeof(double));
+        
+        // 写入RGB颜色值（r, g, b）
+        double r = static_cast<double>(pt.second.Color(0));
+        double g = static_cast<double>(pt.second.Color(1));
+        double b = static_cast<double>(pt.second.Color(2));
+        file.write(reinterpret_cast<const char*>(&r), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&g), sizeof(double));
+        file.write(reinterpret_cast<const char*>(&b), sizeof(double));
+    }
+
+    // 关闭文件
+    file.close();
+    return true;
+}
+
 void Reconstruction::Write(const std::string& path) const { WriteBinary(path); }
 
 void Reconstruction::ReadText(const std::string& path) {

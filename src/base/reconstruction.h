@@ -283,6 +283,8 @@ class Reconstruction {
   void Read(const std::string& path);
   void Write(const std::string& path) const;
 
+  bool WriteBinaryFile(const std::string& filename);
+
   // Read data from binary/text file.
   void ReadText(const std::string& path);
   void ReadBinary(const std::string& path);

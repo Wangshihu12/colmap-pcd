@@ -174,7 +174,7 @@ void COLMAPUndistorter::Run() {
   // PrintHeading1("Image undistortion");
 
   // 创建输出目录结构
-  CreateDirIfNotExists(JoinPaths(output_path_, "images"));                    // 去畸变图像输出目录
+  CreateDirIfNotExists(JoinPaths(output_path_, "img"));                    // 去畸变图像输出目录
   CreateDirIfNotExists(JoinPaths(output_path_, "sparse"));                    // 稀疏重建结果目录
   CreateDirIfNotExists(JoinPaths(output_path_, "sparse/0"));                    // 稀疏重建结果目录
   // CreateDirIfNotExists(JoinPaths(output_path_, "stereo"));                    // 立体视觉处理目录
@@ -183,7 +183,7 @@ void COLMAPUndistorter::Run() {
   // CreateDirIfNotExists(JoinPaths(output_path_, "stereo/consistency_graphs")); // 一致性图目录
   
   // 为重建中的每个图像创建对应的子目录
-  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "images"));                    // 为去畸变图像创建子目录
+  reconstruction_.CreateImageDirs(JoinPaths(output_path_, "img"));                    // 为去畸变图像创建子目录
   // reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/depth_maps"));         // 为深度图创建子目录
   // reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/normal_maps"));        // 为法向量图创建子目录
   // reconstruction_.CreateImageDirs(JoinPaths(output_path_, "stereo/consistency_graphs")); // 为一致性图创建子目录
@@ -248,7 +248,9 @@ void COLMAPUndistorter::Run() {
   // 对重建结果进行去畸变处理
   UndistortReconstruction(options_, &undistorted_reconstruction);
   // 将去畸变后的重建结果写入sparse目录
-  undistorted_reconstruction.Write(JoinPaths(output_path_, "sparse/0"));
+  // undistorted_reconstruction.Write(JoinPaths(output_path_, "sparse/0"));
+  // 修改为写入后处理需要的二进制文件
+  undistorted_reconstruction.WriteBinaryFile(JoinPaths(output_path_, "pre.dat"));
 
   // // 写入MVS（多视图立体视觉）配置文件
   // std::cout << "Writing configuration..." << std::endl;
@@ -274,7 +276,7 @@ bool COLMAPUndistorter::Undistort(const image_t image_id) const {
 
   const std::string input_image_path = JoinPaths(image_path_, image.Name());
   const std::string output_image_path =
-      JoinPaths(output_path_, "images", image.Name());
+      JoinPaths(output_path_, "img", image.Name());
 
   // Check if the image is already undistorted and copy from source if no
   // scaling is needed

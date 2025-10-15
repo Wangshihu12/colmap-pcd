@@ -709,7 +709,7 @@ int AutomaticReconstructor(std::string _workspace_path) {
       return EXIT_FAILURE;
     }
 
-    std::cout << "重建图像数量: " << reconstruction_manager.Get(0).NumRegImages() << std::endl;
+    // std::cout << "重建图像数量: " << reconstruction_manager.Get(0).NumRegImages() << std::endl;
     
     // 保存重建结果
     // const std::string sparse_path = JoinPaths(workspace_path, "sparse");
