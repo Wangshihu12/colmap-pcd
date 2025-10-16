@@ -32,6 +32,8 @@
 #ifndef COLMAP_SRC_OPENGL_UTILS_H_
 #define COLMAP_SRC_OPENGL_UTILS_H_
 
+#include <memory>
+
 #ifdef GUI_ENABLED
 #include <QAction>
 #include <QApplication>
@@ -86,6 +88,9 @@ class OpenGLContextManager : public QObject {
 //
 void RunThreadWithOpenGLContext(Thread* thread);
 
+std::unique_ptr<OpenGLContextManager> CreateOpenGLContextManager(
+    int opengl_major_version = 2, int opengl_minor_version = 1);
+
 // Get the OpenGL errors and print them to stderr.
 void GLError(const char* file, const int line);
 
@@ -100,6 +105,12 @@ class OpenGLContextManager {
 };
 
 inline void RunThreadWithOpenGLContext(Thread* thread) {}
+
+inline std::unique_ptr<OpenGLContextManager> CreateOpenGLContextManager(
+    int opengl_major_version = 2, int opengl_minor_version = 1) {
+  return std::make_unique<OpenGLContextManager>(opengl_major_version,
+                                                opengl_minor_version);
+}
 
 inline void GLError(const char* file, const int line) {}
 

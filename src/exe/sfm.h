@@ -36,6 +36,10 @@
 #include "controllers/incremental_mapper.h"
 #include <functional>
 #include <string>
+#include <QGuiApplication>
+#include <QOffscreenSurface>
+#include <QSurfaceFormat>
+#include <QScreen>
 
 namespace colmap {
 
@@ -63,9 +67,10 @@ int RunReconstructorFromYaml(int argc, char** argv);
  * [功能描述]：自动重建函数（支持进度回调）
  * @param _workspace_path：工作空间路径
  * @param callback：进度回调函数（可选，传nullptr表示不使用回调）
+ * @param use_gpu：是否使用GPU（默认不使用）
  * @return 0 成功，非 0 错误，-1 用户取消
  */
- int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCallback callback);
+ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCallback callback, bool use_gpu = false);
 
 /**
  * [功能描述]：获取当前重建进度百分比

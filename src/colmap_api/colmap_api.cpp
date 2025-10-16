@@ -24,8 +24,8 @@ int RunAutomaticReconstructor(std::string _workspace_path) {
  * @param callback：进度回调函数
  * @return 0 成功，非 0 错误，-1 用户取消
  */
- int RunAutomaticReconstructorWithCallback(std::string _workspace_path, ReconstructionProgressCallback callback) {
-  return AutomaticReconstructor(_workspace_path, callback);
+ int RunAutomaticReconstructorWithCallback(std::string _workspace_path, ReconstructionProgressCallback callback, bool use_gpu) {
+  return AutomaticReconstructor(_workspace_path, callback, use_gpu);
 }
 
 double GetReconstructionProgress() {

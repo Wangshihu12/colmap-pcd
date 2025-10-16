@@ -503,7 +503,7 @@ void ResetReconstructionProgress() {
   g_progress_manager = nullptr;
 }
 
-int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCallback callback) {
+int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCallback callback, bool use_gpu) {
   static std::once_flag glog_once;
   std::call_once(glog_once, []() {
     static char arg0[] = "colmap_api";
@@ -607,19 +607,34 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
   }
   
   options.image_reader->single_camera = true;
+
+  options.sift_extraction->use_gpu = false;
+  options.sift_matching->use_gpu = false;
   
-  // GPU模式 - 创建虚假的argc和argv参数
-  static char app_name[] = "colmap_api";  // 应用程序名称
-  static char* argv[] = {app_name, nullptr};  // 命令行参数数组，只包含程序名
-  static int argc = 1;  // 参数数量
-  
-  // 检查是否已经存在QApplication实例
-  // 如果桌面端软件已经创建了QApplication，就不需要再创建新的
-  std::unique_ptr<QApplication> app;
-  if (!QApplication::instance()) {
-    // 只有在不存在QApplication实例时才创建新的
-    std::cout << "创建QApplication实例..." << std::endl;
-    app.reset(new QApplication(argc, argv));
+  if (use_gpu) {
+    options.sift_extraction->use_gpu = true;
+    options.sift_matching->use_gpu = true;
+
+    // GPU模式 - 创建虚假的argc和argv参数
+    static char app_name[] = "colmap_api";
+    static char platform_arg[] = "-platform";
+    static char platform_val[] = "offscreen";  
+    static char* argv[] = {app_name, platform_arg, platform_val, nullptr};
+    static int argc = 3;
+    
+    // 检查是否已经存在QApplication实例
+    // 如果桌面端软件已经创建了QApplication，就不需要再创建新的
+    std::unique_ptr<QApplication> app;
+    if (!QApplication::instance()) {
+      // 只有在不存在QApplication实例时才创建新的
+      std::cout << "创建QApplication实例..." << std::endl;
+      app.reset(new QApplication(argc, argv));
+
+      // 检测屏幕可用性，如果没有屏幕就降级到CPU
+      if (QGuiApplication::screens().isEmpty()) {
+        std::cout << "警告: 无可用屏幕，GPU模式可能无法工作，建议使用CPU模式" << std::endl;
+      }
+    }
   }
   
   // 验证配置
@@ -684,8 +699,14 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
       }
     });
 
-    // 执行特征提取，使用OPENGL
-    RunThreadWithOpenGLContext(&feature_extractor);
+    if (use_gpu) {
+      // 执行特征提取，使用OPENGL
+      RunThreadWithOpenGLContext(&feature_extractor);
+    } else {
+      // 暂时取消使用OpenGl，直接使用CPU模式
+      feature_extractor.Start();
+      feature_extractor.Wait();
+    }
     
     progress_manager.FinishCurrentStage();
   }
@@ -721,8 +742,14 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
       }
     });
     
-    // 执行特征匹配，使用OPENGL
-    RunThreadWithOpenGLContext(&feature_matcher);
+    if (use_gpu) {
+      // 执行特征匹配，使用OPENGL
+      RunThreadWithOpenGLContext(&feature_matcher);
+    } else {
+      // 暂时取消使用OpenGl，直接使用CPU模式
+      feature_matcher.Start();
+      feature_matcher.Wait();
+    }
     
     progress_manager.FinishCurrentStage();
   }

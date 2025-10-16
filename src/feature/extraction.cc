@@ -397,7 +397,7 @@ SiftFeatureExtractorThread::SiftFeatureExtractorThread(
 
 #ifndef CUDA_ENABLED
   if (sift_options_.use_gpu) {
-    opengl_context_ = std::make_unique<OpenGLContextManager>();
+    opengl_context_ = CreateOpenGLContextManager();
   }
 #endif
 }

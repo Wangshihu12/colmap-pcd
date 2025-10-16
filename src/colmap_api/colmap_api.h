@@ -36,11 +36,13 @@ COLMAP_API int RunAutomaticReconstructor(std::string _workspace_path);
  * @param _workspace_path：工作空间路径。
  * @param callback：进度回调函数，在重建过程中定期调用以报告进度。
  *                  如果回调返回 false，将尝试取消重建。
+ * @param use_gpu：是否使用GPU（默认不使用）
  * @return 返回 0 表示成功，非 0 表示失败，-1 表示用户取消。
  */
  COLMAP_API int RunAutomaticReconstructorWithCallback(
   std::string _workspace_path, 
-  ReconstructionProgressCallback callback);
+  ReconstructionProgressCallback callback,
+  bool use_gpu = false);
 
 /**
  * [功能描述]：获取当前重建进度百分比。

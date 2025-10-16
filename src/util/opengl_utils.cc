@@ -33,6 +33,13 @@
 
 #include "util/logging.h"
 
+#ifdef GUI_ENABLED
+#include <QEventLoop>
+#include <QMetaObject>
+#endif
+
+#include <atomic>
+
 namespace colmap {
 
 #ifdef GUI_ENABLED
@@ -74,17 +81,65 @@ bool OpenGLContextManager::MakeCurrent() {
   return context_.isValid();
 }
 
-void RunThreadWithOpenGLContext(Thread* thread) {
-  std::thread opengl_thread([thread]() {
+std::unique_ptr<OpenGLContextManager> CreateOpenGLContextManager(
+    int opengl_major_version, int opengl_minor_version) {
+  QCoreApplication* app = CHECK_NOTNULL(QCoreApplication::instance());
+  OpenGLContextManager* manager = nullptr;
+  if (QThread::currentThread() == app->thread()) {
+    manager = new OpenGLContextManager(opengl_major_version,
+                                       opengl_minor_version);
+  } else {
+    QMetaObject::invokeMethod(
+        app,
+        [&manager, opengl_major_version, opengl_minor_version]() {
+          manager = new OpenGLContextManager(opengl_major_version,
+                                             opengl_minor_version);
+        },
+        Qt::BlockingQueuedConnection);
+  }
+  CHECK_NOTNULL(manager);
+  return std::unique_ptr<OpenGLContextManager>(manager);
+}
+
+namespace {
+
+void RunThreadWithOpenGLContextOnMainThread(QCoreApplication* app,
+                                            Thread* thread) {
+  std::atomic<bool> finished{false};
+
+  std::thread opengl_thread([thread, &finished]() {
     thread->Start();
     thread->Wait();
-    CHECK_NOTNULL(QCoreApplication::instance())->exit();
+    finished.store(true, std::memory_order_release);
   });
-  CHECK_NOTNULL(QCoreApplication::instance())->exec();
+
+  while (!finished.load(std::memory_order_acquire)) {
+    app->processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents,
+                       50);
+  }
+
   opengl_thread.join();
   // Make sure that all triggered OpenGLContextManager events are processed in
   // case the application exits before the contexts were made current.
   QCoreApplication::processEvents();
+}
+
+}  // namespace
+
+void RunThreadWithOpenGLContext(Thread* thread) {
+  QCoreApplication* app = CHECK_NOTNULL(QCoreApplication::instance());
+  CHECK_NOTNULL(thread);
+  if (QThread::currentThread() != app->thread()) {
+    QMetaObject::invokeMethod(
+        app,
+        [app, thread]() {
+          RunThreadWithOpenGLContextOnMainThread(app, thread);
+        },
+        Qt::BlockingQueuedConnection);
+    return;
+  }
+
+  RunThreadWithOpenGLContextOnMainThread(app, thread);
 }
 
 void GLError(const char* file, const int line) {

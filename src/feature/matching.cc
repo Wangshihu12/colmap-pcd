@@ -396,7 +396,7 @@ SiftGPUFeatureMatcher::SiftGPUFeatureMatcher(const SiftMatchingOptions& options,
   prev_uploaded_image_ids_[1] = kInvalidImageId;
 
 #ifndef CUDA_ENABLED
-  opengl_context_ = std::make_unique<OpenGLContextManager>();
+  opengl_context_ = CreateOpenGLContextManager();
 #endif
 }
 
@@ -516,7 +516,7 @@ GuidedSiftGPUFeatureMatcher::GuidedSiftGPUFeatureMatcher(
   prev_uploaded_image_ids_[1] = kInvalidImageId;
 
 #ifndef CUDA_ENABLED
-  opengl_context_ = std::make_unique<OpenGLContextManager>();
+  opengl_context_ = CreateOpenGLContextManager();
 #endif
 }
 
