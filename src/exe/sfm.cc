@@ -605,6 +605,38 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
   } else {
     std::cerr << "WARNING: 未找到cameras.txt文件" << std::endl;
   }
+
+  // 从 init_pose.txt 文件中读取初始位姿
+  std::string init_pose_file_path = JoinPaths(workspace_path, "init_pose.txt");
+  if (ExistsFile(init_pose_file_path)) {
+    std::ifstream init_pose_file(init_pose_file_path);
+    std::string line;
+    
+    // 逐行读取文件，跳过注释行
+    while (std::getline(init_pose_file, line)) {
+      // 跳过注释行和空行
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+      
+      // 解析初始位姿参数行
+      std::istringstream iss(line);
+      double x, y, z, roll, pitch, yaw;
+      
+      // 按顺序读取：x y z roll pitch yaw
+      if (iss >> x >> y >> z >> roll >> pitch >> yaw) {
+        options.mapper->init_image_x = x;
+        options.mapper->init_image_y = y;
+        options.mapper->init_image_z = z;
+        options.mapper->init_image_roll = roll;
+        options.mapper->init_image_pitch = pitch;
+        options.mapper->init_image_yaw = yaw;
+      }
+    }
+    init_pose_file.close();
+  } else {
+    std::cerr << "WARNING: 未找到cameras.txt文件" << std::endl;
+  }
   
   options.image_reader->single_camera = true;
 
