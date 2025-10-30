@@ -521,7 +521,7 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
     "特征匹配", 
     "增量重建"
   };
-  std::vector<double> stage_weights = {0.2, 0.3, 0.5}; // 各阶段相对耗时权重
+  std::vector<double> stage_weights = {0.3, 0.3, 0.4}; // 各阶段相对耗时权重
   MultiStageProgressManager progress_manager(stage_names, stage_weights);
 
   // 设置全局指针和运行状态
@@ -564,6 +564,9 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
     options.mapper->if_add_lidar_constraint = true;
     options.mapper->lidar_pointcloud_path = lidar_pointcloud_path;
   }
+
+  // TODO: 暂时关闭lidar约束，后续增加读取相机先验位姿，采用随机初始化，然后读取初始化图像的位姿，并启用lidar约束
+  options.mapper->if_add_lidar_constraint = false;
 
   options.image_reader->camera_model = "PINHOLE";
 

@@ -665,6 +665,7 @@ void IncrementalMapperController::Reconstruct(
       if (!reg_init_success) {
         mapper.EndReconstruction(kDiscardReconstruction);
         reconstruction_manager_->Delete(reconstruction_idx);
+        std::cout << "初始化失败" << std::endl;
         break;
       }
 

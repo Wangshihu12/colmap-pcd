@@ -59,6 +59,7 @@ LidarPointcloudPtr PointCloudProcess::PointCloudDirectionTrans(const LidarPointc
         } 
         new_ptr -> points.push_back(point_added);
     }
+    std::cout << "加载点云数量: " << new_ptr->points.size() << std::endl;
     return new_ptr;
 }
 
