@@ -388,85 +388,138 @@ std::vector<image_t> IncrementalMapper::FindNextImages(const Options& options) {
   return ranked_images_ids;
 }
 
+/**
+ * [功能描述]：注册初始图像对用于增量式重建，这是SfM重建的起始步骤。
+ *             该函数估计两幅图像之间的相对位姿，并通过三角化匹配点来生成初始的3D点云。
+ * @param options：重建选项配置，包含三角化角度阈值等参数
+ * @param image_id1：第一张图像的ID（将被设置为世界坐标系的原点）
+ * @param image_id2：第二张图像的ID（其位姿相对于第一张图像计算）
+ * @return 返回是否成功注册初始图像对。true表示成功，false表示失败（如两视图几何估计失败）
+ */
 bool IncrementalMapper::RegisterInitialImagePair(const Options& options,
                                                  const image_t image_id1,
                                                  const image_t image_id2) {
+  // 检查重建对象是否已初始化
   CHECK_NOTNULL(reconstruction_);
+  // 确保这是第一次注册图像对（当前重建中还没有已注册的图像）
   CHECK_EQ(reconstruction_->NumRegImages(), 0);
 
+  // 检查选项配置的有效性
   CHECK(options.Check());
 
+  // 记录每张图像的初始化注册尝试次数（用于统计和调试）
   init_num_reg_trials_[image_id1] += 1;
   init_num_reg_trials_[image_id2] += 1;
+  // 记录每张图像的总注册尝试次数
   num_reg_trials_[image_id1] += 1;
   num_reg_trials_[image_id2] += 1;
 
+  // 将两张图像的ID转换为图像对ID，并记录该图像对已用于初始化
   const image_pair_t pair_id =
       Database::ImagePairToPairId(image_id1, image_id2);
   init_image_pairs_.insert(pair_id);
 
+  // 获取第一张图像及其对应的相机内参
   Image& image1 = reconstruction_->Image(image_id1);
   const Camera& camera1 = reconstruction_->Camera(image1.CameraId());
 
+  // 获取第二张图像及其对应的相机内参
   Image& image2 = reconstruction_->Image(image_id2);
   const Camera& camera2 = reconstruction_->Camera(image2.CameraId());
 
   //////////////////////////////////////////////////////////////////////////////
-  // Estimate two-view geometry
+  // 估计两视图几何关系（相对位姿）
   //////////////////////////////////////////////////////////////////////////////
 
+  // 估计两张图像之间的相对位姿（旋转和平移）
+  // 如果估计失败（如匹配点太少、共面等），则返回false
   if (!EstimateInitialTwoViewGeometry(options, image_id1, image_id2)) {
     return false;
   }
+  
+  // 将第一张图像的位姿设置为单位姿态（世界坐标系的原点）
+  // Qvec为单位四元数 [1, 0, 0, 0]，表示无旋转
   image1.Qvec() = ComposeIdentityQuaternion();
+  // Tvec为零向量，表示位于世界坐标系原点
   image1.Tvec() = Eigen::Vector3d(0, 0, 0);
 
+  // 将第二张图像的位姿设置为相对于第一张图像的估计位姿
+  // qvec为旋转四元数，描述第二张图像相对于第一张图像的旋转
   image2.Qvec() = prev_init_two_view_geometry_.qvec;
+  // tvec为平移向量，描述第二张图像相对于第一张图像的平移
   image2.Tvec() = prev_init_two_view_geometry_.tvec;
 
+  // 计算两张图像的投影矩阵 P = K[R|t]，用于三角化（3x4矩阵）
   const Eigen::Matrix3x4d proj_matrix1 = image1.ProjectionMatrix();
   const Eigen::Matrix3x4d proj_matrix2 = image2.ProjectionMatrix();
+  // 计算两张图像的投影中心（相机在世界坐标系中的位置，3D向量）
   const Eigen::Vector3d proj_center1 = image1.ProjectionCenter();
   const Eigen::Vector3d proj_center2 = image2.ProjectionCenter();
 
   //////////////////////////////////////////////////////////////////////////////
-  // Update Reconstruction
+  // 更新重建对象，注册图像
   //////////////////////////////////////////////////////////////////////////////
 
+  // 将两张图像注册到重建对象中
   reconstruction_->RegisterImage(image_id1);
   reconstruction_->RegisterImage(image_id2);
+  // 触发图像注册事件（用于回调和通知）
   RegisterImageEvent(image_id1);
   RegisterImageEvent(image_id2);
 
+  // 获取特征匹配的对应关系图
   const CorrespondenceGraph& correspondence_graph =
       database_cache_->CorrespondenceGraph();
+  // 获取两张图像之间的所有特征匹配对
   const FeatureMatches& corrs =
       correspondence_graph.FindCorrespondencesBetweenImages(image_id1,
                                                             image_id2);
 
+  // 将最小三角化角度从度转换为弧度
+  // 三角化角度用于过滤质量较差的3D点（角度太小会导致深度不准确）
   const double min_tri_angle_rad = DegToRad(options.init_min_tri_angle);
 
-  // Add 3D point tracks.
+  //////////////////////////////////////////////////////////////////////////////
+  // 通过三角化添加3D点轨迹
+  //////////////////////////////////////////////////////////////////////////////
+  
+  // 创建一个包含两个观测的轨迹（Track表示一个3D点在多张图像中的观测）
   Track track;
-  track.Reserve(2);
+  track.Reserve(2);  // 预分配空间，因为只有两个观测
   track.AddElement(TrackElement());
   track.AddElement(TrackElement());
+  // 设置轨迹中两个元素对应的图像ID
   track.Element(0).image_id = image_id1;
   track.Element(1).image_id = image_id2;
+  
+  // 遍历所有匹配的特征点对
   for (const auto& corr : corrs) {
+    // 将第一张图像中的像素坐标转换为归一化相机坐标（去畸变并应用内参逆）
     const Eigen::Vector2d point1_N =
         camera1.ImageToWorld(image1.Point2D(corr.point2D_idx1).XY());
+    // 将第二张图像中的像素坐标转换为归一化相机坐标
     const Eigen::Vector2d point2_N =
         camera2.ImageToWorld(image2.Point2D(corr.point2D_idx2).XY());
+    
+    // 通过三角化计算3D点的世界坐标（利用两个视图的射线相交）
     const Eigen::Vector3d& xyz =
         TriangulatePoint(proj_matrix1, proj_matrix2, point1_N, point2_N);
+    
+    // 计算三角化角度（两个相机中心与3D点形成的角度）
+    // 角度越大，深度估计越准确
     const double tri_angle =
         CalculateTriangulationAngle(proj_center1, proj_center2, xyz);
+    
+    // 检查三角化质量：
+    // 1. 三角化角度必须大于最小阈值（确保几何稳定性）
+    // 2. 3D点在两个相机视图中的深度都必须为正（点在相机前方）
     if (tri_angle >= min_tri_angle_rad &&
         HasPointPositiveDepth(proj_matrix1, xyz) &&
         HasPointPositiveDepth(proj_matrix2, xyz)) {
+      // 设置轨迹中的2D特征点索引
       track.Element(0).point2D_idx = corr.point2D_idx1;
       track.Element(1).point2D_idx = corr.point2D_idx2;
+      // 将3D点及其观测轨迹添加到重建对象中
       reconstruction_->AddPoint3D(xyz, track);
     }
   }
