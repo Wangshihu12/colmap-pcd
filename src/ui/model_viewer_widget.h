@@ -40,6 +40,9 @@
 
 #include <QOpenGLFunctions_3_2_Core>
 
+#include <array>
+#include <map>
+
 #include "base/database.h"
 #include "base/reconstruction.h"
 #include "ui/colormaps.h"
@@ -125,6 +128,9 @@ class ModelViewerWidget : public QOpenGLWidget,
   void SetImageSize(const float image_size);
 
   void SetBackgroundColor(const float r, const float g, const float b);
+  void SetPosePriors(const std::map<uint32_t, std::vector<double>>& pose_priors);
+  void SetPosePriorVisibility(bool visible);
+  bool PosePriorVisibility() const;
   void UploadLidarMapData();
   void RemoveLidarMapData();
   // Copy of current scene data that is displayed
@@ -135,6 +141,7 @@ class ModelViewerWidget : public QOpenGLWidget,
   EIGEN_STL_UMAP(point3D_t, LidarPoint) lidar_points;
   EIGEN_STL_UMAP(point3D_t, LidarPoint) lidar_points_in_global_;
   std::vector<image_t> reg_image_ids;
+  std::map<image_t, std::array<double, 7>> pose_priors_;
 
   QLabel* statusbar_status_label;
 
@@ -157,6 +164,7 @@ class ModelViewerWidget : public QOpenGLWidget,
   void UploadPointConnectionData();
   void UploadImageData(const bool selection_mode = false);
   void UploadImageConnectionData();
+  void UploadPosePriorData();
   void UploadMovieGrabberData();
   void UploadLidarPointData();
   void UploadPoint2LidarConnectionData();
@@ -189,6 +197,8 @@ class ModelViewerWidget : public QOpenGLWidget,
   LinePainter image_line_painter_;
   TrianglePainter image_triangle_painter_;
   LinePainter image_connection_painter_;
+  LinePainter pose_prior_line_painter_;
+  TrianglePainter pose_prior_triangle_painter_;
 
   LinePainter movie_grabber_path_painter_;
   LinePainter movie_grabber_line_painter_;
@@ -213,6 +223,7 @@ class ModelViewerWidget : public QOpenGLWidget,
   size_t selected_movie_grabber_view_;
 
   bool coordinate_grid_enabled_;
+  bool pose_priors_visible_ = false;
 
   // Size of points (dynamic): does not require re-uploading of points.
   float point_size_;

@@ -248,6 +248,9 @@ class IncrementalMapperController : public Thread {
                               ReconstructionManager* reconstruction_manager);
 
   int OriginImagesNum();
+  bool PosePriorsLoaded() const;
+  bool EnsurePosePriorsLoaded();
+  const std::map<uint32_t, std::vector<double>>& ImagePosePriors() const;
   DatabaseCache database_cache_;//数据都在这里面存着
  private:
   void Run();
@@ -256,7 +259,7 @@ class IncrementalMapperController : public Thread {
   bool LoadColmapPose();
   void Reconstruct(const IncrementalMapper::Options& init_mapper_options);
 
-  const IncrementalMapperOptions* options_;
+  IncrementalMapperOptions* options_;
   const std::string image_path_;
   const std::string database_path_;
   ReconstructionManager* reconstruction_manager_;

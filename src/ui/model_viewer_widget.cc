@@ -31,6 +31,7 @@
 
 #include "ui/model_viewer_widget.h"
 
+#include "base/camera_models.h"
 #include "ui/main_window.h"
 
 #define SELECTION_BUFFER_IMAGE_IDX 0
@@ -43,6 +44,9 @@ const Eigen::Vector4f kSelectedImageFrameColor(0.8f, 0.0f, 0.8f, 1.0f);
 
 const Eigen::Vector4f kMovieGrabberImagePlaneColor(0.0f, 1.0f, 1.0f, 0.6f);
 const Eigen::Vector4f kMovieGrabberImageFrameColor(0.0f, 0.8f, 0.8f, 1.0f);
+
+const Eigen::Vector4f kPosePriorPlaneColor(0.0f, 0.4f, 1.0f, 0.25f);
+const Eigen::Vector4f kPosePriorFrameColor(0.0f, 0.3f, 0.8f, 0.9f);
 
 const Eigen::Vector4f kGridColor(0.2f, 0.2f, 0.2f, 0.6f);
 const Eigen::Vector4f kXAxisColor(0.9f, 0.0f, 0.0f, 0.5f);
@@ -260,6 +264,10 @@ void ModelViewerWidget::paintGL() {
   image_line_painter_.Render(pmv_matrix, width(), height(), 1);
   image_triangle_painter_.Render(pmv_matrix);
   image_connection_painter_.Render(pmv_matrix, width(), height(), 1);
+  if (pose_priors_visible_) {
+    pose_prior_line_painter_.Render(pmv_matrix, width(), height(), 1);
+    pose_prior_triangle_painter_.Render(pmv_matrix);
+  }
 
   // Movie grabber cameras
   movie_grabber_path_painter_.Render(pmv_matrix, width(), height(), 1.5);
@@ -444,6 +452,7 @@ void ModelViewerWidget::ChangeCameraSize(const float delta) {
   image_size_ *= (1.0f + delta / 100.0f * kImageScaleSpeed);
   image_size_ = std::max(kMinImageSize, std::min(kMaxImageSize, image_size_));
   UploadImageData();
+  UploadPosePriorData();
   UploadMovieGrabberData();
   update();
 }
@@ -527,6 +536,7 @@ void ModelViewerWidget::SelectObject(const int x, const int y) {
 
   UploadPointData();
   UploadImageData();
+  UploadPosePriorData();
   UploadPointConnectionData();
   UploadImageConnectionData();
 
@@ -591,6 +601,7 @@ void ModelViewerWidget::SetPointSize(const float point_size) {
 void ModelViewerWidget::SetImageSize(const float image_size) {
   image_size_ = image_size;
   UploadImageData();
+  UploadPosePriorData();
 }
 
 void ModelViewerWidget::SetBackgroundColor(const float r, const float g,
@@ -599,6 +610,47 @@ void ModelViewerWidget::SetBackgroundColor(const float r, const float g,
   background_color_[1] = g;
   background_color_[2] = b;
   update();
+}
+
+void ModelViewerWidget::SetPosePriors(
+    const std::map<uint32_t, std::vector<double>>& pose_priors) {
+  pose_priors_.clear();
+  for (const auto& entry : pose_priors) {
+    if (entry.second.size() < 7) {
+      continue;
+    }
+    std::array<double, 7> values;
+    for (size_t i = 0; i < 7; ++i) {
+      values[i] = entry.second[i];
+    }
+    pose_priors_.emplace(static_cast<image_t>(entry.first), values);
+  }
+
+  if (pose_priors_visible_) {
+    UploadPosePriorData();
+  }
+}
+
+void ModelViewerWidget::SetPosePriorVisibility(const bool visible) {
+  if (pose_priors_visible_ == visible) {
+    if (visible) {
+      update();
+    }
+    return;
+  }
+
+  pose_priors_visible_ = visible;
+  if (pose_priors_visible_) {
+    UploadPosePriorData();
+  } else {
+    pose_prior_line_painter_.Setup();
+    pose_prior_triangle_painter_.Setup();
+    update();
+  }
+}
+
+bool ModelViewerWidget::PosePriorVisibility() const {
+  return pose_priors_visible_;
 }
 
 void ModelViewerWidget::mousePressEvent(QMouseEvent* event) {
@@ -670,6 +722,8 @@ void ModelViewerWidget::SetupPainters() {
   image_line_painter_.Setup();
   image_triangle_painter_.Setup();
   image_connection_painter_.Setup();
+  pose_prior_line_painter_.Setup();
+  pose_prior_triangle_painter_.Setup();
 
   movie_grabber_path_painter_.Setup();
   movie_grabber_line_painter_.Setup();
@@ -699,6 +753,7 @@ void ModelViewerWidget::Upload() {
     UploadPoint2LidarConnectionInGlobalData();
   }
   UploadImageData();
+  UploadPosePriorData();
   UploadMovieGrabberData();
   UploadPointConnectionData();
   UploadImageConnectionData();
@@ -1148,6 +1203,61 @@ void ModelViewerWidget::UploadImageConnectionData() {
   image_connection_painter_.Upload(line_data);
 }
 
+void ModelViewerWidget::UploadPosePriorData() {
+  makeCurrent();
+
+  std::vector<LinePainter::Data> line_data;
+  std::vector<TrianglePainter::Data> triangle_data;
+
+  if (!pose_priors_visible_) {
+    pose_prior_line_painter_.Upload(line_data);
+    pose_prior_triangle_painter_.Upload(triangle_data);
+    update();
+    return;
+  }
+
+  triangle_data.reserve(2 * pose_priors_.size());
+  line_data.reserve(8 * pose_priors_.size());
+
+  for (const auto& prior : pose_priors_) {
+    const image_t image_id = prior.first;
+    const std::array<double, 7>& pose = prior.second;
+    const Eigen::Vector4d qvec(pose[3], pose[4], pose[5], pose[6]);
+    if (qvec.norm() == 0.0) {
+      continue;
+    }
+
+    Image prior_image;
+    const Camera* camera_ptr = nullptr;
+    Camera fallback_camera;
+
+    if (reconstruction != nullptr && reconstruction->ExistsImage(image_id)) {
+      const Image& base_image = reconstruction->Image(image_id);
+      if (!reconstruction->ExistsCamera(base_image.CameraId())) {
+        continue;
+      }
+      prior_image = base_image;
+      camera_ptr = &reconstruction->Camera(base_image.CameraId());
+    } else {
+      prior_image.SetImageId(image_id);
+      prior_image.SetCameraId(static_cast<camera_t>(image_id));
+      fallback_camera.InitializeWithId(SimplePinholeCameraModel::model_id,
+                                       1500.0, 2048, 1536);
+      camera_ptr = &fallback_camera;
+    }
+
+    prior_image.SetQvec(qvec);
+    prior_image.NormalizeQvec();
+    prior_image.SetTvec(Eigen::Vector3d(pose[0], pose[1], pose[2]));
+
+    BuildImageModel(prior_image, *camera_ptr, image_size_, kPosePriorPlaneColor,
+                    kPosePriorFrameColor, &triangle_data, &line_data);
+  }
+
+  pose_prior_line_painter_.Upload(line_data);
+  pose_prior_triangle_painter_.Upload(triangle_data);
+  update();
+}
 void ModelViewerWidget::UploadMovieGrabberData() {
   makeCurrent();
 

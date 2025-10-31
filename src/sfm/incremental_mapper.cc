@@ -32,9 +32,12 @@
 #include "sfm/incremental_mapper.h"
 
 #include <array>
+#include <cmath>
 #include <fstream>
+#include <limits>
 
 #include "base/projection.h"
+#include "base/pose.h"
 #include "base/triangulation.h"
 #include "estimators/pose.h"
 #include "util/bitmap.h"
@@ -449,6 +452,61 @@ bool IncrementalMapper::RegisterInitialImagePair(const Options& options,
   // tvec为平移向量，描述第二张图像相对于第一张图像的平移
   image2.Tvec() = prev_init_two_view_geometry_.tvec;
 
+  // Initialize first image pose; use prior when provided
+  if (if_import_pose_prior_) {
+    const auto iter = existed_poses_.find(image1.ImageId());
+    if (iter != existed_poses_.end() && iter->second.size() >= 7) {
+      const std::vector<double>& pose = iter->second;
+      Eigen::Vector3d t_cw(pose[0], pose[1], pose[2]);
+      Eigen::Vector4d q_cw(pose[3], pose[4], pose[5], pose[6]);
+      image1.SetQvec(q_cw);
+      image1.SetTvec(t_cw);
+    } else {
+      image1.Qvec() = ComposeIdentityQuaternion();
+      image1.Tvec() = Eigen::Vector3d(0, 0, 0);
+    }
+  } else {
+    image1.Qvec() = ComposeIdentityQuaternion();
+    image1.Tvec() = Eigen::Vector3d(0, 0, 0);
+  }
+
+  // // 将相对位姿与第一张图像的全局位姿组合，得到第二张图像的全局位姿
+  // const Eigen::Vector4d rel_qvec = prev_init_two_view_geometry_.qvec;
+  // const Eigen::Vector3d rel_tvec = prev_init_two_view_geometry_.tvec;
+  // Eigen::Quaterniond q_rel(rel_qvec(0), rel_qvec(1), rel_qvec(2), rel_qvec(3));
+  // q_rel.normalize();
+
+  // const Eigen::Vector4d qvec1 = image1.Qvec();
+  // Eigen::Quaterniond q1(qvec1(0), qvec1(1), qvec1(2), qvec1(3));
+  // q1.normalize();
+
+  // Eigen::Quaterniond q2 = q_rel * q1;
+  // q2.normalize();
+  // Eigen::Vector4d qvec2(q2.w(), q2.x(), q2.y(), q2.z());
+  // image2.SetQvec(qvec2);
+  
+  // const Eigen::Vector3d tvec1 = image1.Tvec();
+  // const Eigen::Matrix3d R_rel = q_rel.toRotationMatrix();
+  // const Eigen::Vector3d tvec2 = R_rel * tvec1 + rel_tvec;
+  // image2.SetTvec(tvec2);
+
+  if (if_import_pose_prior_) {
+    const auto iter = existed_poses_.find(image2.ImageId());
+    if (iter != existed_poses_.end() && iter->second.size() >= 7) {
+      const std::vector<double>& pose = iter->second;
+      Eigen::Vector3d t_cw(pose[0], pose[1], pose[2]);
+      Eigen::Vector4d q_cw(pose[3], pose[4], pose[5], pose[6]);
+      image2.SetQvec(q_cw);
+      image2.SetTvec(t_cw);
+    } else {
+      image2.Qvec() = ComposeIdentityQuaternion();
+      image2.Tvec() = Eigen::Vector3d(0, 0, 0);
+    }
+  } else {
+    image2.Qvec() = ComposeIdentityQuaternion();
+    image2.Tvec() = Eigen::Vector3d(0, 0, 0);
+  }
+
   // 计算两张图像的投影矩阵 P = K[R|t]，用于三角化（3x4矩阵）
   const Eigen::Matrix3x4d proj_matrix1 = image1.ProjectionMatrix();
   const Eigen::Matrix3x4d proj_matrix2 = image2.ProjectionMatrix();
@@ -776,6 +834,8 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
   // 增加该图像的注册尝试次数计数器
   // 用于限制单个图像的最大尝试次数，避免无限重试
   num_reg_trials_[image_id] += 1;
+
+  std::cout << "image.NumVisiblePoints3D(): " << image.NumVisiblePoints3D() << std::endl;
 
   // 检查是否有足够的2D-3D对应关系进行位姿估计
   // 可见3D点数量必须满足绝对位姿估计的最小内点要求
@@ -1528,6 +1588,7 @@ bool IncrementalMapper::AdjustGlobalBundleByLidar(
 
   // 执行优化求解，如果失败则返回false
   if (!bundle_adjuster.Solve(reconstruction_)) {
+    std::cout << "全局束调整失败" << std::endl;
     return false;
   }
 

@@ -566,7 +566,11 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
   }
 
   // TODO: 暂时关闭lidar约束，后续增加读取相机先验位姿，采用随机初始化，然后读取初始化图像的位姿，并启用lidar约束
-  options.mapper->if_add_lidar_constraint = false;
+  // options.mapper->if_add_lidar_constraint = true;
+
+  // 加载相机位姿先验
+  options.mapper->if_import_pose_prior = true;
+  options.mapper->image_pose_prior_path = JoinPaths(workspace_path, "sparse/0/images.txt");
 
   options.image_reader->camera_model = "PINHOLE";
 

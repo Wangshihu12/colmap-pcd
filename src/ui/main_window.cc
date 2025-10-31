@@ -292,6 +292,12 @@ void MainWindow::CreateActions() {
   connect(action_load_lidar_map_, &QAction::triggered, this,
           &MainWindow::LoadLidarPoint);
 
+  action_toggle_pose_priors_ =
+      new QAction(QIcon(":/media/pose.png"), tr("Show pose priors"), this);
+  action_toggle_pose_priors_->setCheckable(true);
+  connect(action_toggle_pose_priors_, &QAction::toggled, this,
+          &MainWindow::TogglePosePriorDisplay);
+
   action_save_image_poses_ = 
       new QAction(QIcon(":/media/pose.png"),
                   tr("Save pose file"), this);
@@ -497,6 +503,7 @@ void MainWindow::CreateToolbar() {
   reconstruction_toolbar_->addAction(action_bundle_adjustment_);
   reconstruction_toolbar_->addAction(action_dense_reconstruction_);
   reconstruction_toolbar_->addAction(action_load_lidar_map_);
+  reconstruction_toolbar_->addAction(action_toggle_pose_priors_);
   reconstruction_toolbar_->addAction(action_save_image_poses_);
   reconstruction_toolbar_->setIconSize(QSize(16, 16));
 
@@ -1009,6 +1016,17 @@ void MainWindow::ReconstructionReset() {
   action_reconstruction_pause_->setEnabled(false);
 
   RenderClear();
+
+  pose_priors_visible_ = false;
+  if (action_toggle_pose_priors_) {
+    action_toggle_pose_priors_->blockSignals(true);
+    action_toggle_pose_priors_->setChecked(false);
+    action_toggle_pose_priors_->blockSignals(false);
+    action_toggle_pose_priors_->setText(tr("Show pose priors"));
+  }
+  if (model_viewer_widget_) {
+    model_viewer_widget_->SetPosePriorVisibility(false);
+  }
 }
 
 void MainWindow::ReconstructionNormalize() {
@@ -1072,6 +1090,56 @@ void MainWindow::LoadLidarPoint(){
     action_load_lidar_map_->setText(tr("Point cloud display on"));
     model_viewer_widget_->RemoveLidarMapData();
     lidar_map_show_ = false;
+  }
+}
+
+void MainWindow::TogglePosePriorDisplay(const bool checked) {
+  if (!mapper_controller_) {
+    action_toggle_pose_priors_->blockSignals(true);
+    action_toggle_pose_priors_->setChecked(false);
+    action_toggle_pose_priors_->blockSignals(false);
+    action_toggle_pose_priors_->setText(tr("Show pose priors"));
+    pose_priors_visible_ = false;
+    return;
+  }
+
+  if (checked) {
+    if (!mapper_controller_->EnsurePosePriorsLoaded()) {
+      std::cout << std::endl
+                << "[IncrementalMapper] Pose prior file unavailable. "
+                << "Please configure Mapper.image_pose_prior_path first."
+                << std::endl
+                << std::endl;
+      action_toggle_pose_priors_->blockSignals(true);
+      action_toggle_pose_priors_->setChecked(false);
+      action_toggle_pose_priors_->blockSignals(false);
+      action_toggle_pose_priors_->setText(tr("Show pose priors"));
+      pose_priors_visible_ = false;
+      return;
+    }
+
+    const auto& pose_priors = mapper_controller_->ImagePosePriors();
+    if (pose_priors.empty()) {
+      std::cout << std::endl
+                << "[IncrementalMapper] Pose prior file did not contain any "
+                << "valid poses." << std::endl
+                << std::endl;
+      action_toggle_pose_priors_->blockSignals(true);
+      action_toggle_pose_priors_->setChecked(false);
+      action_toggle_pose_priors_->blockSignals(false);
+      action_toggle_pose_priors_->setText(tr("Show pose priors"));
+      pose_priors_visible_ = false;
+      return;
+    }
+
+    model_viewer_widget_->SetPosePriors(pose_priors);
+    model_viewer_widget_->SetPosePriorVisibility(true);
+    action_toggle_pose_priors_->setText(tr("Hide pose priors"));
+    pose_priors_visible_ = true;
+  } else {
+    model_viewer_widget_->SetPosePriorVisibility(false);
+    action_toggle_pose_priors_->setText(tr("Show pose priors"));
+    pose_priors_visible_ = false;
   }
 }
 

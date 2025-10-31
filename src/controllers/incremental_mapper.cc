@@ -73,7 +73,7 @@ void AdjustGlobalBundle(const IncrementalMapperOptions& options,
   }
 
   // 打印全局束调整开始的标题
-  // PrintHeading1("Global bundle adjustment");
+  PrintHeading1("Global bundle adjustment");
 
   // 根据配置选择合适的全局束调整方法
   if (options.if_add_lidar_constraint) {
@@ -430,7 +430,7 @@ void IncrementalMapperController::Run() {
   // 如果启用了导入位姿先验选项，尝试加载已有的相机位姿
   // 这通常用于使用外部位姿信息辅助重建
   if (options_->if_import_pose_prior) {
-    if (!LoadPose()) {
+    if (!EnsurePosePriorsLoaded()) {
       return;
     }
   }
@@ -555,6 +555,30 @@ int IncrementalMapperController::OriginImagesNum() {
   return num;
 }
 
+bool IncrementalMapperController::PosePriorsLoaded() const {
+  return !image_poses_.empty();
+}
+
+bool IncrementalMapperController::EnsurePosePriorsLoaded() {
+  if (!image_poses_.empty()) {
+    std::cout << "先验位姿不存在" << std::endl;
+    return true;
+  }
+
+  if (options_->image_pose_prior_path.empty()) {
+    std::cout << "先验位姿路径不存在" << std::endl;
+    return false;
+  }
+
+  image_poses_.clear();
+  return LoadPose();
+}
+
+const std::map<uint32_t, std::vector<double>>&
+IncrementalMapperController::ImagePosePriors() const {
+  return image_poses_;
+}
+
 /**
  * 增量式三维重建主控函数 - 执行完整的SfM重建流程
  * 
@@ -626,11 +650,12 @@ void IncrementalMapperController::Reconstruct(
       // 初始化图像ID，可以是用户指定的或自动选择的
       image_t image_id1 = static_cast<image_t>(options_->init_image_id1);
       image_t image_id2 = static_cast<image_t>(options_->init_image_id2);
+      IncrementalMapper::Options mapper_options = init_mapper_options;
 
       // 如果没有指定初始图像对，自动寻找合适的初始对
       if (options_->init_image_id1 == -1 || options_->init_image_id2 == -1) {
         const bool find_init_success = mapper.FindInitialImagePair(
-            init_mapper_options, &image_id1, &image_id2);
+            mapper_options, &image_id1, &image_id2);
         // 如果找不到好的初始图像对，放弃当前尝试
         if (!find_init_success) {
           mapper.EndReconstruction(kDiscardReconstruction);
@@ -650,15 +675,19 @@ void IncrementalMapperController::Reconstruct(
       // input: initial image pair
 
       // 根据是否使用激光雷达约束选择不同的初始化方法
+      mapper_options.init_image_id1 = static_cast<int>(image_id1);
+      mapper_options.init_image_id2 = static_cast<int>(image_id2);
+      options_->init_image_id1 = mapper_options.init_image_id1;
+      options_->init_image_id2 = mapper_options.init_image_id2;
       bool reg_init_success;
       if (false){
         // 使用深度投影方法初始化
         reg_init_success = mapper.RegisterInitialImagePairByDepthProj(
-          init_mapper_options, image_id1, image_id2);
+          mapper_options, image_id1, image_id2);
       } else {
         // 使用传统方法初始化
         reg_init_success = mapper.RegisterInitialImagePair(
-            init_mapper_options, image_id1, image_id2);
+            mapper_options, image_id1, image_id2);
       } 
           
       // 初始化失败
@@ -673,19 +702,29 @@ void IncrementalMapperController::Reconstruct(
       AdjustGlobalBundle(*options_, &mapper);
 
       // 过滤低质量的点和图像
-      FilterPoints(*options_, &mapper);
-      FilterImages(*options_, &mapper);
+      size_t num_filtered_points = FilterPoints(*options_, &mapper);
+      std::cout << "过滤低质量的点数量: "
+                << num_filtered_points << std::endl;
+      size_t num_filtered_images = FilterImages(*options_, &mapper);
+      std::cout << "过滤低质量的图像数量: "
+                << num_filtered_images << std::endl;
+
+      options_->init_image_id1 = -1;
+      options_->init_image_id2 = -1;
  
       // 如果初始化后没有成功注册图像或三角化点，放弃当前尝试
       if (reconstruction.NumRegImages() == 0 ||
           reconstruction.NumPoints3D() == 0) {
         mapper.EndReconstruction(kDiscardReconstruction);
         reconstruction_manager_->Delete(reconstruction_idx);
+        std::cout << "初始化后没有成功注册图像或三角化点" << std::endl;
         // 如果初始图像对是手动指定的，不再尝试其他初始对
         if (options_->init_image_id1 != -1 && options_->init_image_id2 != -1) {
           break;
+          std::cout << "初始图像对是手动指定的，不再尝试其他初始对" << std::endl;
         } else {
           continue;
+          std::cout << "继续尝试其他初始对" << std::endl;
         }
       }
 
@@ -701,6 +740,8 @@ void IncrementalMapperController::Reconstruct(
     ////////////////////////////////////////////////////////////////////////////
     // Incremental mapping
     ////////////////////////////////////////////////////////////////////////////
+
+    std::cout << "开始增量式重建" << std::endl;
 
     // 记录重建状态，用于决定何时执行全局优化
     size_t snapshot_prev_num_reg_images = reconstruction.NumRegImages();
@@ -723,6 +764,9 @@ void IncrementalMapperController::Reconstruct(
       const std::vector<image_t> next_images =
           mapper.FindNextImages(options_->Mapper());
 
+      std::cout << "下一批重建的图像数量: "
+                << next_images.size() << std::endl;
+
       // 如果没有更多图像可注册，结束增量式重建
       if (next_images.empty()) {
         break;
@@ -732,6 +776,14 @@ void IncrementalMapperController::Reconstruct(
       for (size_t reg_trial = 0; reg_trial < next_images.size(); ++reg_trial) {
         const image_t next_image_id = next_images[reg_trial];
         const Image& next_image = reconstruction.Image(next_image_id);
+
+        PrintHeading1(StringPrintf("Registering image #%d (%d)", next_image_id,
+                                    reconstruction.NumRegImages() + 1));
+
+        std::cout << StringPrintf("  => Image sees %d / %d points",
+                                  next_image.NumVisiblePoints3D(),
+                                  next_image.NumObservations())
+                  << std::endl;
 
         // 注册下一张图像
         reg_next_success =
@@ -901,16 +953,20 @@ bool IncrementalMapperController::LoadPose() {
 
         }
 
-        double t_x = static_cast<double>(pose[0]);
-        double t_y = static_cast<double>(pose[1]);
-        double t_z = static_cast<double>(pose[2]);
-        double qw = static_cast<double>(pose[3]);
-        double qx = static_cast<double>(pose[4]);
-        double qy = static_cast<double>(pose[5]);
-        double qz = static_cast<double>(pose[6]);
+        double t_x = -static_cast<double>(pose[1]);
+        double t_y = -static_cast<double>(pose[2]);
+        double t_z = static_cast<double>(pose[0]);
+        double roll = static_cast<double>(pose[3]);
+        double pitch = -static_cast<double>(pose[4]);
+        double yaw = -static_cast<double>(pose[5]);
 
-        Eigen::Quaterniond q_wc(qw, qx, qy, qz);
-        Eigen::Matrix3d R_wc = q_wc.toRotationMatrix();
+        Eigen::AngleAxisd rollAngle(Eigen::AngleAxisd(roll,Eigen::Vector3d::UnitZ()));
+        Eigen::AngleAxisd pitchAngle(Eigen::AngleAxisd(pitch,Eigen::Vector3d::UnitX()));
+        Eigen::AngleAxisd yawAngle(Eigen::AngleAxisd(yaw,Eigen::Vector3d::UnitY()));
+      
+        Eigen::Matrix3d rotation_matrix;
+        rotation_matrix = yawAngle * pitchAngle * rollAngle;
+        Eigen::Matrix3d R_wc = rotation_matrix;
 
         Eigen::Vector3d t_wc;
         t_wc << t_x, t_y, t_z;
