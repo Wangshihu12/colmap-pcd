@@ -727,7 +727,7 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
     }
     
     // 创建序列特征匹配器
-    SequentialFeatureMatcher feature_matcher(*options.sequential_matching,
+    ExhaustiveFeatureMatcher feature_matcher(*options.exhaustive_matching,
                                              *options.sift_matching,
                                              database_path);
     
@@ -737,17 +737,17 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
     const size_t total_matches = std::min(num_images, (size_t)options.sequential_matching->overlap);
     progress_manager.StartStage(1, num_images);
     
-    // 设置进度回调
-    size_t completed_matches = 0;
-    feature_matcher.AddCallback(SequentialFeatureMatcher::PROGRESS_CALLBACK, [&]() {
-      ++completed_matches;
-      progress_manager.UpdateCurrentStage(completed_matches);
+    // // 设置进度回调
+    // size_t completed_matches = 0;
+    // feature_matcher.AddCallback(SequentialFeatureMatcher::PROGRESS_CALLBACK, [&]() {
+    //   ++completed_matches;
+    //   progress_manager.UpdateCurrentStage(completed_matches);
 
-      if (callback != nullptr) {
-        double progress = g_progress_manager->GetOverallProgress();
-        callback(progress, "特征匹配", false);
-      }
-    });
+    //   if (callback != nullptr) {
+    //     double progress = g_progress_manager->GetOverallProgress();
+    //     callback(progress, "特征匹配", false);
+    //   }
+    // });
     
     if (use_gpu) {
       // 执行特征匹配，使用OPENGL

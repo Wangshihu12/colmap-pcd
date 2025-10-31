@@ -835,7 +835,7 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
   // 用于限制单个图像的最大尝试次数，避免无限重试
   num_reg_trials_[image_id] += 1;
 
-  std::cout << "image.NumVisiblePoints3D(): " << image.NumVisiblePoints3D() << std::endl;
+  // std::cout << "image.NumVisiblePoints3D(): " << image.NumVisiblePoints3D() << std::endl;
 
   // 检查是否有足够的2D-3D对应关系进行位姿估计
   // 可见3D点数量必须满足绝对位姿估计的最小内点要求

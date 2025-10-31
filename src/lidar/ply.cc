@@ -42,22 +42,16 @@ LidarPointcloudPtr PointCloudProcess::PointCloudDirectionTrans(const LidarPointc
     new_ptr->reserve(pt_num);
 
     for (int i = 0; i < pt_num; i++){
-        LidarPoint point_added;
-        point_added.x = - ptr->points[i].y;
-        point_added.y = - ptr->points[i].z;
-        point_added.z = ptr->points[i].x;
-        point_added.normal_x = - ptr->points[i].normal_y;
-        point_added.normal_y = - ptr->points[i].normal_z;
-        point_added.normal_z = ptr->points[i].normal_x;
-        if(std::isnan(point_added.x)||
-           std::isnan(point_added.y)||
-           std::isnan(point_added.z)||
-           std::isnan(point_added.normal_x)||
-           std::isnan(point_added.normal_y)||
-           std::isnan(point_added.normal_z)){
+        const LidarPoint& src_point = ptr->points[i];
+        if(std::isnan(src_point.x)||
+           std::isnan(src_point.y)||
+           std::isnan(src_point.z)||
+           std::isnan(src_point.normal_x)||
+           std::isnan(src_point.normal_y)||
+           std::isnan(src_point.normal_z)){
               continue;
         } 
-        new_ptr -> points.push_back(point_added);
+        new_ptr -> points.push_back(src_point);
     }
     std::cout << "加载点云数量: " << new_ptr->points.size() << std::endl;
     return new_ptr;

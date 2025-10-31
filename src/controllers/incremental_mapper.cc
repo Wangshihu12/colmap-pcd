@@ -73,7 +73,7 @@ void AdjustGlobalBundle(const IncrementalMapperOptions& options,
   }
 
   // 打印全局束调整开始的标题
-  PrintHeading1("Global bundle adjustment");
+  // PrintHeading1("Global bundle adjustment");
 
   // 根据配置选择合适的全局束调整方法
   if (options.if_add_lidar_constraint) {
@@ -655,13 +655,18 @@ void IncrementalMapperController::Reconstruct(
       // 如果没有指定初始图像对，自动寻找合适的初始对
       if (options_->init_image_id1 == -1 || options_->init_image_id2 == -1) {
         const bool find_init_success = mapper.FindInitialImagePair(
-            mapper_options, &image_id1, &image_id2);
+          mapper_options, &image_id1, &image_id2);
         // 如果找不到好的初始图像对，放弃当前尝试
         if (!find_init_success) {
           mapper.EndReconstruction(kDiscardReconstruction);
           reconstruction_manager_->Delete(reconstruction_idx);
           break;
         }
+        // 自动选择初始图像对后，记录实际使用的初始图像ID
+        options_->init_image_id1 = static_cast<int>(image_id1);
+        options_->init_image_id2 = static_cast<int>(image_id2);
+        mapper_options.init_image_id1 = options_->init_image_id1;
+        mapper_options.init_image_id2 = options_->init_image_id2;
       } else {
         // 检查用户指定的初始图像对是否存在
         if (!reconstruction.ExistsImage(image_id1) ||
@@ -675,10 +680,10 @@ void IncrementalMapperController::Reconstruct(
       // input: initial image pair
 
       // 根据是否使用激光雷达约束选择不同的初始化方法
-      mapper_options.init_image_id1 = static_cast<int>(image_id1);
-      mapper_options.init_image_id2 = static_cast<int>(image_id2);
-      options_->init_image_id1 = mapper_options.init_image_id1;
-      options_->init_image_id2 = mapper_options.init_image_id2;
+      // mapper_options.init_image_id1 = static_cast<int>(image_id1);
+      // mapper_options.init_image_id2 = static_cast<int>(image_id2);
+      // options_->init_image_id1 = mapper_options.init_image_id1;
+      // options_->init_image_id2 = mapper_options.init_image_id2;
       bool reg_init_success;
       if (false){
         // 使用深度投影方法初始化
@@ -687,7 +692,7 @@ void IncrementalMapperController::Reconstruct(
       } else {
         // 使用传统方法初始化
         reg_init_success = mapper.RegisterInitialImagePair(
-            mapper_options, image_id1, image_id2);
+          mapper_options, image_id1, image_id2);
       } 
           
       // 初始化失败
@@ -709,8 +714,8 @@ void IncrementalMapperController::Reconstruct(
       std::cout << "过滤低质量的图像数量: "
                 << num_filtered_images << std::endl;
 
-      options_->init_image_id1 = -1;
-      options_->init_image_id2 = -1;
+      // options_->init_image_id1 = -1;
+      // options_->init_image_id2 = -1;
  
       // 如果初始化后没有成功注册图像或三角化点，放弃当前尝试
       if (reconstruction.NumRegImages() == 0 ||
@@ -764,8 +769,8 @@ void IncrementalMapperController::Reconstruct(
       const std::vector<image_t> next_images =
           mapper.FindNextImages(options_->Mapper());
 
-      std::cout << "下一批重建的图像数量: "
-                << next_images.size() << std::endl;
+      // std::cout << "下一批重建的图像数量: "
+      //           << next_images.size() << std::endl;
 
       // 如果没有更多图像可注册，结束增量式重建
       if (next_images.empty()) {
@@ -777,13 +782,13 @@ void IncrementalMapperController::Reconstruct(
         const image_t next_image_id = next_images[reg_trial];
         const Image& next_image = reconstruction.Image(next_image_id);
 
-        PrintHeading1(StringPrintf("Registering image #%d (%d)", next_image_id,
-                                    reconstruction.NumRegImages() + 1));
+        // PrintHeading1(StringPrintf("Registering image #%d (%d)", next_image_id,
+        //                             reconstruction.NumRegImages() + 1));
 
-        std::cout << StringPrintf("  => Image sees %d / %d points",
-                                  next_image.NumVisiblePoints3D(),
-                                  next_image.NumObservations())
-                  << std::endl;
+        // std::cout << StringPrintf("  => Image sees %d / %d points",
+        //                           next_image.NumVisiblePoints3D(),
+        //                           next_image.NumObservations())
+        //           << std::endl;
 
         // 注册下一张图像
         reg_next_success =
@@ -953,16 +958,16 @@ bool IncrementalMapperController::LoadPose() {
 
         }
 
-        double t_x = -static_cast<double>(pose[1]);
-        double t_y = -static_cast<double>(pose[2]);
-        double t_z = static_cast<double>(pose[0]);
+        double t_x = static_cast<double>(pose[0]);
+        double t_y = static_cast<double>(pose[1]);
+        double t_z = static_cast<double>(pose[2]);
         double roll = static_cast<double>(pose[3]);
-        double pitch = -static_cast<double>(pose[4]);
-        double yaw = -static_cast<double>(pose[5]);
+        double pitch = static_cast<double>(pose[4]);
+        double yaw = static_cast<double>(pose[5]);
 
-        Eigen::AngleAxisd rollAngle(Eigen::AngleAxisd(roll,Eigen::Vector3d::UnitZ()));
-        Eigen::AngleAxisd pitchAngle(Eigen::AngleAxisd(pitch,Eigen::Vector3d::UnitX()));
-        Eigen::AngleAxisd yawAngle(Eigen::AngleAxisd(yaw,Eigen::Vector3d::UnitY()));
+        Eigen::AngleAxisd rollAngle(Eigen::AngleAxisd(roll,Eigen::Vector3d::UnitX()));
+        Eigen::AngleAxisd pitchAngle(Eigen::AngleAxisd(pitch,Eigen::Vector3d::UnitY()));
+        Eigen::AngleAxisd yawAngle(Eigen::AngleAxisd(yaw,Eigen::Vector3d::UnitZ()));
       
         Eigen::Matrix3d rotation_matrix;
         rotation_matrix = yawAngle * pitchAngle * rollAngle;
@@ -1012,7 +1017,6 @@ bool IncrementalMapperController::LoadColmapPose() {
   if (read_pose.is_open()){
     std::string str;                    // 存储每行读取的字符串
     bool end_header_show = false;       // 标记是否已读取完文件头
-    image_t image_id = 0;              // 图像ID计数器
     bool skip_next_line = false;       // 标记是否跳过下一行（用于跳过0.0 0.0 -1行）
     
     // 逐行读取文件内容
@@ -1025,8 +1029,6 @@ bool IncrementalMapperController::LoadColmapPose() {
           continue;
         }
 
-        image_id += 1;       // 图像ID递增
-        
         // 检查数据中是否包含NaN值
         bool exist_nan = false;
         std::stringstream ss(str);      // 用于解析数值的字符串流
@@ -1132,7 +1134,7 @@ bool IncrementalMapperController::LoadColmapPose() {
               q_cw_adj.w(), q_cw_adj.x(), q_cw_adj.y(), q_cw_adj.z()
           };
       
-          image_poses_.emplace(image_id, trans_pose);
+          image_poses_.emplace(static_cast<image_t>(id), trans_pose);
           skip_next_line = true;
         }
         
