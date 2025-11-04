@@ -400,6 +400,10 @@ class SiftFeatureMatcher {
 // are on the main diagonal and denote pairs of the same image.
 class ExhaustiveFeatureMatcher : public Thread {
  public:
+  enum {
+    PROGRESS_CALLBACK,  // 进度更新回调
+  };
+
   ExhaustiveFeatureMatcher(const ExhaustiveMatchingOptions& options,
                            const SiftMatchingOptions& match_options,
                            const std::string& database_path);

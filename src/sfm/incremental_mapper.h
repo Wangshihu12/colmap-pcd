@@ -74,7 +74,7 @@ class IncrementalMapper {
     double ba_spherical_search_radius;
     int ba_match_features_threshold;
     // Minimum number of inliers for initial image pair.
-    int init_min_num_inliers = 100;
+    int init_min_num_inliers = 300;
 
     // The image identifiers used to initialize the reconstruction. Note that
     // only one or both image identifiers can be specified. In the former case,

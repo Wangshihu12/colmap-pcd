@@ -726,28 +726,37 @@ int AutomaticReconstructor(std::string _workspace_path, ReconstructionProgressCa
       return EXIT_FAILURE;
     }
     
-    // 创建序列特征匹配器
+    // 创建穷举特征匹配器
     ExhaustiveFeatureMatcher feature_matcher(*options.exhaustive_matching,
+    // SequentialFeatureMatcher feature_matcher(*options.sequential_matching,
                                              *options.sift_matching,
                                              database_path);
     
-    // 估算匹配任务总数（基于图像数量和重叠参数）
+    // 估算匹配任务的块数量（基于图像数量和穷举匹配的block size）
     Database temp_database(database_path);
     const size_t num_images = temp_database.ReadAllImages().size();
-    const size_t total_matches = std::min(num_images, (size_t)options.sequential_matching->overlap);
-    progress_manager.StartStage(1, num_images);
+    const size_t block_size =
+        static_cast<size_t>(options.exhaustive_matching->block_size);
+    const size_t num_blocks =
+        block_size > 0 ? (num_images + block_size - 1) / block_size : 0;
+    const size_t total_block_tasks =
+        num_blocks > 0 ? num_blocks * num_blocks : (num_images > 0 ? 1 : 0);
+    const size_t total_progress_steps =
+        std::max<size_t>(1, total_block_tasks);
+    progress_manager.StartStage(1, total_progress_steps);
     
-    // // 设置进度回调
-    // size_t completed_matches = 0;
-    // feature_matcher.AddCallback(SequentialFeatureMatcher::PROGRESS_CALLBACK, [&]() {
-    //   ++completed_matches;
-    //   progress_manager.UpdateCurrentStage(completed_matches);
+    // 设置进度回调
+    size_t completed_blocks = 0;
+    feature_matcher.AddCallback(ExhaustiveFeatureMatcher::PROGRESS_CALLBACK, [&]() {
+      ++completed_blocks;
+      progress_manager.UpdateCurrentStage(
+          std::min(completed_blocks, total_progress_steps));
 
-    //   if (callback != nullptr) {
-    //     double progress = g_progress_manager->GetOverallProgress();
-    //     callback(progress, "特征匹配", false);
-    //   }
-    // });
+      if (callback != nullptr) {
+        double progress = g_progress_manager->GetOverallProgress();
+        callback(progress, "特征匹配", false);
+      }
+    });
     
     if (use_gpu) {
       // 执行特征匹配，使用OPENGL

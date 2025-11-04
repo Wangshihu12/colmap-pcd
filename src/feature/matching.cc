@@ -895,6 +895,7 @@ ExhaustiveFeatureMatcher::ExhaustiveFeatureMatcher(
       database_(database_path),
       cache_(5 * options_.block_size, &database_),
       matcher_(match_options, &database_, &cache_) {
+  RegisterCallback(PROGRESS_CALLBACK);
   CHECK(options_.Check());
   CHECK(match_options_.Check());
 }
@@ -955,6 +956,7 @@ void ExhaustiveFeatureMatcher::Run() {
 
       DatabaseTransaction database_transaction(&database_);
       matcher_.Match(image_pairs);
+      Callback(PROGRESS_CALLBACK);
 
       PrintElapsedTime(timer);
     }

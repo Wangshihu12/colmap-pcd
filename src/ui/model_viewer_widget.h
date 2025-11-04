@@ -76,7 +76,7 @@ class ModelViewerWidget : public QOpenGLWidget,
   const float kMinPointSize = 0.5f;
   const float kMaxPointSize = 100.0f;
   const float kPointScaleSpeed = 0.1f;
-  const float kInitImageSize = 0.2f;
+  const float kInitImageSize = 0.1f;
   const float kMinImageSize = 1e-6f;
   const float kMaxImageSize = 1e3f;
   const float kImageScaleSpeed = 0.1f;
