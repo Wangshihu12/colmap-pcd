@@ -1,4 +1,4 @@
-// Copyright (c) 2023, ETH Zurich and UNC Chapel Hill.
+﻿// Copyright (c) 2023, ETH Zurich and UNC Chapel Hill.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -435,36 +435,101 @@ void IncrementalMapperController::Run() {
     }
   }
 
-  // 创建初始重建选项的副本，用于后续可能的参数调整
-  IncrementalMapper::Options init_mapper_options = options_->Mapper();
+  // 将初始化与放宽逻辑封装，便于在不同初始图像策略之间复用
+  auto attempt_reconstruction =
+      [&](IncrementalMapper::Options mapper_options) -> bool {
+    const size_t prev_num_models = reconstruction_manager_->Size();
+    // 只要新模型超过“只有初始图像对”的状态，就认为初始化成功
+    const size_t min_success_reg_images =
+        std::min<size_t>(3, database_cache_.NumImages());
 
-  // 使用初始参数尝试执行重建
-  Reconstruct(init_mapper_options);
+    auto has_viable_new_model = [&]() -> bool {
+      if (IsStopped()) {
+        return true;
+      }
+      for (size_t idx = prev_num_models; idx < reconstruction_manager_->Size();
+           ++idx) {
+        if (reconstruction_manager_->Get(idx).NumRegImages() >=
+            min_success_reg_images) {
+          return true;
+        }
+      }
+      return false;
+    };
 
-  // 定义最大放宽初始化参数的次数
-  // 如果初始参数下重建失败，将逐步放宽约束条件再次尝试
-  const size_t kNumInitRelaxations = 2;
-  for (size_t i = 0; i < kNumInitRelaxations; ++i) {
-    // 如果已经成功重建或用户中止，则退出放宽循环
-    if (reconstruction_manager_->Size() > 0 || IsStopped()) {
-      break;
+    auto remove_new_models = [&]() {
+      for (size_t idx = reconstruction_manager_->Size(); idx > prev_num_models;
+           --idx) {
+        reconstruction_manager_->Delete(idx - 1);
+      }
+    };
+
+    auto reconstruction_succeeded = [&]() {
+      if (has_viable_new_model()) {
+        return true;
+      }
+      remove_new_models();
+      return false;
+    };
+
+    // 使用当前参数尝试执行重建
+    Reconstruct(mapper_options);
+    if (reconstruction_succeeded()) {
+      return true;
     }
 
-    // 第一次放宽：减少所需的内点数量
-    // 这降低了图像对初始化时所需匹配点的数量门槛
-    init_mapper_options.init_min_num_inliers /= 2; // 将最小内点数减半
-    Reconstruct(init_mapper_options); // 使用新参数再次尝试重建
+    // 定义最大放宽初始化参数的次数
+    // 如果初始参数下重建失败，将逐步放宽约束条件再次尝试
+    const size_t kNumInitRelaxations = 2;
+    for (size_t i = 0; i < kNumInitRelaxations; ++i) {
+      if (IsStopped()) {
+        return true;
+      }
 
-    // 检查是否成功或中止
-    if (reconstruction_manager_->Size() > 0 || IsStopped()) {
-      break;
+      // 第一次放宽：减少所需的内点数量
+      mapper_options.init_min_num_inliers /= 2;
+      Reconstruct(mapper_options);
+      if (reconstruction_succeeded()) {
+        return true;
+      }
+
+      // 第二次放宽：减小三角化所需的最小角度
+      mapper_options.init_min_tri_angle /= 2;
+      Reconstruct(mapper_options);
+      if (reconstruction_succeeded()) {
+        return true;
+      }
     }
 
-    // 第二次放宽：减小三角化所需的最小角度
-    // 这允许在视差较小的情况下也能初始化重建
-    init_mapper_options.init_min_tri_angle /= 2; // 将最小三角化角度减半
-    Reconstruct(init_mapper_options); // 使用新参数再次尝试重建
+    return reconstruction_succeeded();
+  };
+
+  const int manual_init_image_id1 = options_->init_image_id1;
+  const int manual_init_image_id2 = options_->init_image_id2;
+  const bool has_manual_init_pair =
+      manual_init_image_id1 != -1 || manual_init_image_id2 != -1;
+
+  auto attempt_with_pair = [&](int id1, int id2) -> bool {
+    options_->init_image_id1 = id1;
+    options_->init_image_id2 = id2;
+    auto mapper_options = options_->Mapper();
+    mapper_options.init_image_id1 = id1;
+    mapper_options.init_image_id2 = id2;
+    return attempt_reconstruction(mapper_options);
+  };
+
+  if (has_manual_init_pair) {
+    if (!attempt_with_pair(manual_init_image_id1, manual_init_image_id2) &&
+        !IsStopped()) {
+      attempt_with_pair(-1, -1);
+    }
+  } else {
+    attempt_with_pair(-1, -1);
   }
+
+  // 运行结束后恢复用户设定，确保下次运行依旧按相同策略起步
+  options_->init_image_id1 = manual_init_image_id1;
+  options_->init_image_id2 = manual_init_image_id2;
 }
 
 /**
