@@ -251,35 +251,48 @@ Database::Database(const std::string& path) : Database() { Open(path); }
 
 Database::~Database() { Close(); }
 
+/**
+ * [功能描述]：打开指定路径的 SQLite 数据库，并进行性能优化配置。
+ * @param path：数据库文件的路径（字符串格式）。
+ * @return 无返回值。
+ */
 void Database::Open(const std::string& path) {
+  // 关闭当前已打开的数据库连接（如果存在）
   Close();
 
-  // SQLITE_OPEN_NOMUTEX specifies that the connection should not have a
-  // mutex (so that we don't serialize the connection's operations).
-  // Modifications to the database will still be serialized, but multiple
-  // connections can read concurrently.
+  // 打开 SQLite 数据库文件
+  // SQLITE_OPEN_NOMUTEX 指定连接不使用互斥锁（不串行化连接的操作）
+  // 这样可以允许多个连接并发读取，但数据库修改仍会被串行化
+  // SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE：以读写模式打开，如果文件不存在则创建
   SQLITE3_CALL(sqlite3_open_v2(
       path.c_str(), &database_,
       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
       nullptr));
 
-  // Don't wait for the operating system to write the changes to disk
+  // 设置同步模式为 OFF：不等待操作系统将更改写入磁盘
+  // 提高写入速度，但在系统崩溃时可能导致数据损坏
   SQLITE3_EXEC(database_, "PRAGMA synchronous=OFF", nullptr);
 
-  // Use faster journaling mode
+  // 使用 WAL（Write-Ahead Logging）日志模式：更快的日志记录方式
+  // WAL 模式允许读写并发，提高数据库性能
   SQLITE3_EXEC(database_, "PRAGMA journal_mode=WAL", nullptr);
 
-  // Store temporary tables and indices in memory
+  // 将临时表和索引存储在内存中：加快临时数据的访问速度
   SQLITE3_EXEC(database_, "PRAGMA temp_store=MEMORY", nullptr);
 
-  // Disabled by default
+  // 启用外键约束：默认情况下 SQLite 的外键约束是禁用的
+  // 启用后可以保证数据的引用完整性
   SQLITE3_EXEC(database_, "PRAGMA foreign_keys=ON", nullptr);
 
-  // Enable auto vacuum to reduce DB file size
+  // 启用自动清理模式：自动回收未使用的数据库空间
+  // 有助于减少数据库文件大小，防止文件无限增长
   SQLITE3_EXEC(database_, "PRAGMA auto_vacuum=1", nullptr);
 
+  // 创建数据库表结构
   CreateTables();
+  // 更新数据库模式（如果需要）
   UpdateSchema();
+  // 准备预编译的 SQL 语句，提高后续查询效率
   PrepareSQLStatements();
 }
 
@@ -1291,7 +1304,14 @@ void Database::CreateTables() const {
   CreateTwoViewGeometriesTable();
 }
 
+/**
+ * [功能描述]：创建相机参数表 cameras。
+ * @return 无返回值。
+ */
 void Database::CreateCameraTable() const {
+  // 定义创建相机表的 SQL 语句
+  // 表字段：camera_id（相机ID，主键自增）、model（相机模型）、
+  //        width/height（图像宽高）、params（相机参数BLOB）、prior_focal_length（先验焦距）
   const std::string sql =
       "CREATE TABLE IF NOT EXISTS cameras"
       "   (camera_id            INTEGER  PRIMARY KEY AUTOINCREMENT  NOT NULL,"
@@ -1301,6 +1321,7 @@ void Database::CreateCameraTable() const {
       "    params               BLOB,"
       "    prior_focal_length   INTEGER                             NOT NULL);";
 
+  // 执行 SQL 语句创建表
   SQLITE3_EXEC(database_, sql.c_str(), nullptr);
 }
 
